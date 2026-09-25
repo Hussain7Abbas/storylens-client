@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Settings } from "../config";
-import type { ModelOption } from "../types";
+import type { ModelOption, ResponseLanguage } from "../types";
 import { ClientError } from "../types";
 import { runCli, withWorkDir } from "./process";
 
@@ -41,18 +41,20 @@ export function parseCodexOutput(stdout: string): string {
   return result.trim();
 }
 
-export async function executeProvider(settings: Settings, model: ModelOption, effort: string, prompt: string, signal: AbortSignal): Promise<string> {
+export async function executeProvider(settings: Settings, model: ModelOption, effort: string, prompt: string, responseLanguage: ResponseLanguage, signal: AbortSignal): Promise<string> {
   return withWorkDir(async cwd => {
+    const language = responseLanguage === "ar" ? "Arabic" : "English";
+    const localizedPrompt = `Response language: ${language} (${responseLanguage}). Write the final answer in ${language}.\n\n${prompt}`;
     if (model.provider === "claude") {
       const args = ["-p", "--model", model.providerModel, "--output-format", "json", "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "", "--settings", '{"disableAllHooks":true}', "--disable-slash-commands", "--no-session-persistence"];
       if (effort !== "default") args.push("--effort", effort);
-      const { stdout } = await runCli(settings.claudePath, args, prompt, { cwd, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
+      const { stdout } = await runCli(settings.claudePath, args, localizedPrompt, { cwd, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
       return parseClaudeOutput(stdout);
     }
     const args = ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "-c", "mcp_servers={}", "-c", "project_doc_max_bytes=0", "--disable", "browser_use", "--disable", "computer_use", "--disable", "apps", "--disable", "plugins", "--disable", "hooks", "--disable", "shell_tool", "-m", model.providerModel];
     if (effort !== "default") args.push("-c", `model_reasoning_effort="${effort}"`);
     args.push("-");
-    const { stdout } = await runCli(settings.codexPath, args, prompt, { cwd, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
+    const { stdout } = await runCli(settings.codexPath, args, localizedPrompt, { cwd, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
     return parseCodexOutput(stdout);
   });
 }

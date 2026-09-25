@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "smoke:browser": "bun scripts/smoke-browser.ts",
+    "smoke:launcher": "bun scripts/smoke-launcher.ts",
     "pack": "bun run build && electron-builder --dir",
     "dist:mac": "bun run build && electron-builder --mac --publish never",
     "dist:win": "bun run build && electron-builder --win --x64 --publish never"

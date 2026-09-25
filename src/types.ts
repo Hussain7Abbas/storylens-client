@@ -1,4 +1,5 @@
 export type ProviderName = "claude" | "codex";
+export type ResponseLanguage = "en" | "ar";
 export type ModelOption = {
   id: string;
   provider: ProviderName;
@@ -10,18 +11,19 @@ export type ModelOption = {
 };
 export type CapabilityStatus = { provider: ProviderName; available: boolean; error?: string };
 export type Capabilities = {
-  protocolVersion: 1;
+  protocolVersion: 2;
   models: ModelOption[];
   providers: CapabilityStatus[];
   limits: { promptBytes: number; outputBytes: number; timeoutMs: number; concurrent: number };
 };
-export type ExecuteInput = { prompt: string; model: string; effort: string };
+export type ExecuteInput = { prompt: string; model: string; effort: string; responseLanguage: ResponseLanguage };
 export type ExecuteOutput = {
   requestId: string;
   output: string;
   model: string;
   provider: ProviderName;
   effort: string;
+  responseLanguage: ResponseLanguage;
   durationMs: number;
 };
 export class ClientError extends Error {

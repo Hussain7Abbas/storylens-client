@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, readdir, mkdtemp, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { ClientError } from "../types";
 
 const binFolders = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
@@ -31,6 +31,13 @@ export async function executablePath(configured: string): Promise<string> {
   throw new ClientError("CLI_NOT_FOUND", `Executable ${configured} was not found. Set its path in the desktop app.`, 503);
 }
 
+export function cliEnvironment(executable: string): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  const pathKey = Object.keys(environment).find(key => key.toLowerCase() === "path") ?? "PATH";
+  environment[pathKey] = [dirname(executable), environment[pathKey]].filter(Boolean).join(delimiter);
+  return environment;
+}
+
 export function stopProcess(child: ChildProcessWithoutNullStreams): void {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
@@ -57,7 +64,7 @@ export async function runCli(
   const child = spawn(path, args, {
     cwd: options.cwd, stdio: "pipe", windowsHide: true, detached: process.platform !== "win32",
     shell: process.platform === "win32" && path.toLowerCase().endsWith(".cmd"),
-    env: { ...process.env, PATH: [path.substring(0, path.lastIndexOf(process.platform === "win32" ? "\\" : "/")), process.env.PATH].filter(Boolean).join(delimiter) },
+    env: cliEnvironment(path),
   });
   const maxBytes = options.maxBytes ?? 2_000_000;
   const stdoutChunks: Buffer[] = [], stderrChunks: Buffer[] = [];

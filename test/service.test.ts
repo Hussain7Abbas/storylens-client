@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SettingsStore } from "../src/config";
+import { discoverCatalog } from "../src/providers/catalog";
 import { createServer } from "../src/server";
 import { PromptService } from "../src/service";
 import { executeProvider, parseClaudeOutput, parseCodexOutput } from "../src/providers/execute";
@@ -26,7 +27,7 @@ describe("ExecutePrompt boundary", () => {
   test("rejects missing credentials and website origins before running a provider", async () => {
     let calls = 0;
     const { server, headers } = await fixture(async () => { calls++; return "ok"; });
-    const body = { prompt: "hello", model: model.id, effort: "low" };
+    const body = { prompt: "hello", model: model.id, effort: "low", responseLanguage: "en" };
     expect((await server.inject({ method: "POST", url: "/ExecutePrompt", headers: { host: headers.host }, payload: body })).statusCode).toBe(401);
     expect((await server.inject({ method: "POST", url: "/ExecutePrompt", headers: { ...headers, origin: "https://evil.example" }, payload: body })).statusCode).toBe(403);
     expect((await server.inject({ method: "POST", url: "/ExecutePrompt", headers: { ...headers, host: "attacker.example" }, payload: body })).statusCode).toBe(403);
@@ -35,12 +36,13 @@ describe("ExecutePrompt boundary", () => {
   });
   test("validates dynamic model effort and returns final text", async () => {
     const { server, headers } = await fixture();
-    const unknown = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: model.id, effort: "max" } });
+    const unknown = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: model.id, effort: "max", responseLanguage: "en" } });
     expect(unknown.statusCode).toBe(422);
-    const valid = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: "codex-sol6", effort: "low" } });
+    const valid = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: "codex-sol6", effort: "low", responseLanguage: "ar" } });
     expect(valid.statusCode).toBe(200);
     expect(valid.json().output).toBe("A plain text result");
     expect(valid.json().model).toBe(model.id);
+    expect(valid.json().responseLanguage).toBe("ar");
     const caps = await server.inject({ method: "GET", url: "/capabilities", headers });
     expect(caps.json().models[0].efforts).toEqual(["low", "medium"]);
     await server.close();
@@ -48,7 +50,7 @@ describe("ExecutePrompt boundary", () => {
   test("limits concurrent provider work", async () => {
     const releases: (() => void)[] = [];
     const { service, server } = await fixture(() => new Promise<string>(resolve => { releases.push(() => resolve("done")); }));
-    const input = { prompt: "hello", model: model.id, effort: "low" };
+    const input = { prompt: "hello", model: model.id, effort: "low", responseLanguage: "en" };
     const first = service.executePrompt(input); const second = service.executePrompt(input);
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(service.activeCount()).toBe(2);
@@ -59,16 +61,16 @@ describe("ExecutePrompt boundary", () => {
   });
   test("streams a terminal result and cancels running work on shutdown", async () => {
     const { server, headers } = await fixture();
-    const streamed = await server.inject({ method: "POST", url: "/ExecutePrompt", headers: { ...headers, accept: "application/x-ndjson" }, payload: { prompt: "hello", model: model.id, effort: "low" } });
+    const streamed = await server.inject({ method: "POST", url: "/ExecutePrompt", headers: { ...headers, accept: "application/x-ndjson" }, payload: { prompt: "hello", model: model.id, effort: "low", responseLanguage: "en" } });
     expect(streamed.statusCode).toBe(200);
     expect(streamed.body.trim().split("\n").map(line => JSON.parse(line).type)).toEqual(["started", "result"]);
     await server.close();
 
     let canceled = false;
-    const second = await fixture((_settings, _model, _effort, _prompt, signal) => new Promise<string>((_resolve, reject) => {
+    const second = await fixture((_settings, _model, _effort, _prompt, _responseLanguage, signal) => new Promise<string>((_resolve, reject) => {
       signal.addEventListener("abort", () => { canceled = true; reject(new Error("canceled")); }, { once: true });
     }));
-    const pending = second.service.executePrompt({ prompt: "hello", model: model.id, effort: "low" }).catch(() => {});
+    const pending = second.service.executePrompt({ prompt: "hello", model: model.id, effort: "low", responseLanguage: "en" }).catch(() => {});
     await new Promise(resolve => setTimeout(resolve, 10));
     second.service.cancelAll();
     await pending;
@@ -78,7 +80,49 @@ describe("ExecutePrompt boundary", () => {
   });
 });
 
+test("response language is required and reaches the provider", async () => {
+  let received = "";
+  const { server, headers } = await fixture(async (_settings, _model, _effort, _prompt, responseLanguage) => {
+    received = responseLanguage;
+    return "تم";
+  });
+  const missing = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: model.id, effort: "low" } });
+  expect(missing.statusCode).toBe(400);
+  const invalid = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: model.id, effort: "low", responseLanguage: "fr" } });
+  expect(invalid.statusCode).toBe(400);
+  const valid = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: model.id, effort: "low", responseLanguage: "ar" } });
+  expect(valid.statusCode).toBe(200);
+  expect(received).toBe("ar");
+  expect(valid.json().responseLanguage).toBe("ar");
+  await server.close();
+});
+
 test("provider parsers return final messages, not progress or tool text", () => {
   expect(parseClaudeOutput('{"type":"system"}\n{"type":"result","is_error":false,"result":"OK"}\n')).toBe("OK");
   expect(parseCodexOutput('{"type":"item.completed","item":{"type":"command_execution","text":"private"}}\n{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}\n')).toBe("OK");
+});
+
+if (process.platform !== "win32") test("Codex catalog starts with a GUI-style PATH and waits for initialization", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "storylens-catalog-test-"));
+  dirs.push(dir);
+  const codex = join(dir, "codex");
+  await writeFile(codex, "#!/usr/bin/env storylens-catalog-runtime\n", { mode: 0o755 });
+  await writeFile(join(dir, "storylens-catalog-runtime"), [
+    "#!/bin/sh",
+    "IFS= read -r initialize",
+    "printf '%s\\n' '{\"id\":1,\"result\":{\"userAgent\":\"test\"}}'",
+    "IFS= read -r initialized",
+    "IFS= read -r model_list",
+    "printf '%s\\n' '{\"id\":2,\"result\":{\"data\":[{\"id\":\"gpt-test\",\"model\":\"gpt-test\",\"inputModalities\":[\"text\"],\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}}'",
+  ].join("\n"), { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = "/usr/bin:/bin";
+  try {
+    const result = await discoverCatalog({ port: 43127, token: "test", claudePath: "/missing-claude", codexPath: codex, extraModels: [] });
+    expect(result.providers.find(provider => provider.provider === "codex")?.available).toBe(true);
+    expect(result.models.find(item => item.id === "codex:gpt-test")?.efforts).toEqual(["low"]);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
 });

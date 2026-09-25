@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Settings } from "../config";
 import type { CapabilityStatus, ModelOption, ProviderName } from "../types";
 import { ClientError } from "../types";
-import { executablePath, stopProcess } from "./process";
+import { cliEnvironment, executablePath, stopProcess } from "./process";
 
 type RpcMessage = { id?: number; method?: string; result?: unknown; error?: unknown; type?: string; request_id?: string; response?: unknown };
 const codexModel = z.object({
@@ -31,9 +31,11 @@ async function queryModels(
 ): Promise<unknown[]> {
   const path = await executablePath(executable);
   return new Promise((resolve, reject) => {
-    const child = spawn(path, args, { stdio: "pipe", windowsHide: true, detached: process.platform !== "win32", shell: process.platform === "win32" && path.toLowerCase().endsWith(".cmd") });
+    const child = spawn(path, args, { stdio: "pipe", windowsHide: true, detached: process.platform !== "win32", shell: process.platform === "win32" && path.toLowerCase().endsWith(".cmd"), env: cliEnvironment(path) });
     const models: unknown[] = [];
     let buffer = "", done = false, currentId = 2;
+    const initialize = initial.find(message => message.method === "initialize");
+    const afterInitialize = initial.filter(message => message.method !== "initialize");
     const decoder = new StringDecoder("utf8");
     const finish = (error?: Error) => {
       if (done) return;
@@ -42,6 +44,7 @@ async function queryModels(
     };
     const timer = setTimeout(() => finish(new ClientError("CATALOG_TIMEOUT", "Provider model discovery timed out.", 503)), 12_000);
     child.on("error", error => finish(error));
+    child.stdin.on("error", error => finish(error));
     child.stdout.on("data", (chunk: Buffer) => {
       buffer += decoder.write(chunk);
       if (buffer.length > 3_000_000) { finish(new ClientError("CATALOG_TOO_LARGE", "Provider catalog is too large.", 503)); return; }
@@ -50,7 +53,18 @@ async function queryModels(
         const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
         try {
           const msg = JSON.parse(line) as RpcMessage;
-          if (msg.error && (msg.id === currentId || msg.request_id === "models")) throw new Error(JSON.stringify(msg.error));
+          if (msg.error && (msg.id === initialize?.id || msg.id === currentId || msg.request_id === "models")) throw new ClientError("CATALOG_FAILED", "Provider rejected model discovery. Check its CLI installation and sign-in.", 503);
+          if (initialize && msg.id === initialize.id) {
+            if (!msg.result) throw new ClientError("CATALOG_FAILED", "Provider initialization returned no result.", 503);
+            for (const message of afterInitialize) child.stdin.write(`${JSON.stringify(message)}\n`);
+            child.stdin.write(`${JSON.stringify(request(currentId))}\n`);
+            newline = buffer.indexOf("\n");
+            continue;
+          }
+          if (initialize && msg.id !== currentId) {
+            newline = buffer.indexOf("\n");
+            continue;
+          }
           const page = response(msg);
           if (page) {
             models.push(...page.models);
@@ -65,8 +79,11 @@ async function queryModels(
       }
     });
     child.on("close", () => { if (!done) finish(new ClientError("CATALOG_FAILED", "Provider did not return a model catalog.", 503)); });
-    for (const message of initial) child.stdin.write(`${JSON.stringify(message)}\n`);
-    child.stdin.write(`${JSON.stringify(request(currentId))}\n`);
+    if (initialize) child.stdin.write(`${JSON.stringify(initialize)}\n`);
+    else {
+      for (const message of afterInitialize) child.stdin.write(`${JSON.stringify(message)}\n`);
+      child.stdin.write(`${JSON.stringify(request(currentId))}\n`);
+    }
   });
 }
 
