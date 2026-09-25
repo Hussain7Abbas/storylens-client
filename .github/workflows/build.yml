@@ -1,0 +1,37 @@
+name: Desktop client
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+          - os: windows-latest
+            target: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Typecheck and test
+        run: |
+          bun run typecheck
+          bun test
+      - name: Package
+        run: bun run dist:${{ matrix.target }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: storylens-client-${{ matrix.target }}
+          path: |
+            release/*.dmg
+            release/*.exe
+          if-no-files-found: error

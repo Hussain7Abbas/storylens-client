@@ -1,0 +1,53 @@
+{
+  "name": "storylens-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local AI desktop companion for the Story Lens browser extension",
+  "author": "Story Lens",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "main": "dist/desktop/main.js",
+  "scripts": {
+    "dev": "bun run build && electron .",
+    "postinstall": "bun node_modules/electron/install.js",
+    "build": "tsc && bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "smoke:browser": "bun scripts/smoke-browser.ts",
+    "pack": "bun run build && electron-builder --dir",
+    "dist:mac": "bun run build && electron-builder --mac",
+    "dist:win": "bun run build && electron-builder --win --x64"
+  },
+  "dependencies": {
+    "fastify": "^5.12.5",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.6",
+    "@types/node": "^24.0.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.9.2"
+  },
+  "trustedDependencies": ["electron", "electron-winstaller"],
+  "build": {
+    "appId": "com.iscoded.storylens.client",
+    "productName": "Story Lens Client",
+    "icon": "build/icon.png",
+    "directories": {
+      "output": "release"
+    },
+    "files": ["dist/**/*", "package.json"],
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
