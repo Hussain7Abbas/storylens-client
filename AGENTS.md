@@ -6,4 +6,4 @@ This repository is the desktop client for Story Lens and has independent Bun dep
 - `src/service.ts` owns command admission and limits; `src/server.ts` owns the loopback HTTP interface. Do not import Electron into these modules.
 - `src/desktop/` owns main, preload, and renderer. Keep Node integration off, context isolation and sandbox on, and preload IPC narrow.
 - Keep credentials in private app settings. Never log pairing token, page HTML, prompts, or output.
-- Run `bun run typecheck`, `bun test`, and `bun run build`. When working in the umbrella checkout, root rules also require extension/backend typechecks. Keep this file and docs current.
+- Run `bun run typecheck`, `bun test`, and `bun run build` (or the matching Makefile targets). When working in the umbrella checkout, root rules also require extension/backend typechecks. Keep this file and docs current.
