@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, clipboard, ipcMain } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, shell } from "electron";
 import { SettingsStore } from "../config";
 import { createServer } from "../server";
 import { PromptService } from "../service";
@@ -60,7 +60,11 @@ else {
     window = new BrowserWindow({ width: 610, height: 660, minWidth: 500, minHeight: 560, title: "Story Lens Client", webPreferences: {
       preload: join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true,
     } });
-    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      const allowed = new Set(["https://storylens.iscoded.com/en/", "https://storylens.iscoded.com/en/privacy/", "https://storylens.iscoded.com/en/terms/"]);
+      if (allowed.has(url)) void shell.openExternal(url).catch(() => {});
+      return { action: "deny" };
+    });
     window.webContents.on("will-navigate", event => event.preventDefault());
     window.on("closed", () => { window = undefined; app.quit(); });
     await window.loadFile(join(__dirname, "index.html"));
