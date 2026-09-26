@@ -1,6 +1,6 @@
 {
   "name": "storylens-client",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Local AI desktop companion for the Story Lens browser extension",
   "author": "Story Lens",
@@ -30,7 +30,10 @@
     "playwright-core": "^1.63.0",
     "typescript": "^5.9.2"
   },
-  "trustedDependencies": ["electron", "electron-winstaller"],
+  "trustedDependencies": [
+    "electron",
+    "electron-winstaller"
+  ],
   "build": {
     "appId": "com.iscoded.storylens.client",
     "productName": "Story Lens Client",
@@ -38,13 +41,20 @@
     "directories": {
       "output": "release"
     },
-    "files": ["dist/**/*", "package.json"],
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.productivity"
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "nsis": {
       "oneClick": false,
