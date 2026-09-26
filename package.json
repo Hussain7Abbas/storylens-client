@@ -1,6 +1,6 @@
 {
   "name": "storylens-client",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Local AI desktop companion for the Story Lens browser extension",
   "author": "Story Lens",
