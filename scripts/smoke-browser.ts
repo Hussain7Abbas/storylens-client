@@ -23,17 +23,17 @@ try {
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
   });
   const worker = context.serviceWorkers()[0] ?? await context.waitForEvent("serviceworker", { timeout: 20_000 });
-  const extensionId = new URL(worker.url()).host;
   await worker.evaluate(async value => {
-    await chrome.storage.local.set({ "storylens-desktop-client": value });
+    await chrome.storage.local.set({
+      "storylens-desktop-client": value,
+      // Summaries start from the page launcher, which needs a website selector.
+      "storylens-website-selector-cache:127.0.0.1": { website: "127.0.0.1", novel: {}, chapter: {} },
+    });
   }, { ...settings, model, effort });
   const sitePage = await context.newPage();
   await sitePage.goto("http://127.0.0.1:45271/");
-  const popup = await context.newPage();
-  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-  await sitePage.bringToFront();
-  await popup.getByRole("button", { name: "Summarize page" }).evaluate(button => (button as HTMLButtonElement).click());
-  await popup.close();
+  await sitePage.locator("#storylens-page-launcher #launcher").hover({ timeout: 20_000 });
+  await sitePage.locator('#storylens-page-launcher [data-action="summarize"]').click();
   await sitePage.locator("#storylens-page-summary").waitFor({ timeout: 20_000 });
   await sitePage.waitForFunction(() => {
     const host = document.querySelector("#storylens-page-summary");

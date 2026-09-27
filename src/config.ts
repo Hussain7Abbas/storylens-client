@@ -6,6 +6,7 @@ import { z } from "zod";
 const schema = z.object({
   port: z.number().int().min(1024).max(65535).default(43127),
   token: z.string().min(32),
+  keepInSystemTray: z.boolean().default(true),
   claudePath: z.string().max(1024).default("claude"),
   codexPath: z.string().max(1024).default("codex"),
   extraModels: z.array(z.object({ provider: z.enum(["claude", "codex"]), model: z.string().regex(/^[a-zA-Z0-9.:[\]-]+$/), label: z.string().min(1).max(100), efforts: z.array(z.enum(["default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])).min(1) })).default([]),
