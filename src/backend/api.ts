@@ -20,6 +20,8 @@ const PAGE_SIZE = 200;
 /** Stops runaway pagination on a misbehaving server. */
 const MAX_ITEMS = 20_000;
 const TIMEOUT_MS = 30_000;
+/** Reader API prefix; the shared `apiUrl` is the API origin. */
+export const USER_API_PREFIX = "/api/user";
 
 /** Encodes nested objects as `key[field]=value`, the form the extension's Axios client sends and the API parses. */
 export function encodeQuery(query: Query): string {
@@ -39,7 +41,7 @@ export class StoryLensApi {
   constructor(private readonly account: Account, private readonly fetchImpl: typeof fetch = fetch) {}
 
   private async request<T>(method: "GET" | "POST", path: string, options: { query?: Query; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
-    const url = `${this.account.apiUrl.replace(/\/+$/, "")}${path}${encodeQuery(options.query ?? {})}`;
+    const url = `${this.account.apiUrl.replace(/\/+$/, "")}${USER_API_PREFIX}${path}${encodeQuery(options.query ?? {})}`;
     const signals = [AbortSignal.timeout(TIMEOUT_MS), ...(options.signal ? [options.signal] : [])];
     let response: Response;
     try {
