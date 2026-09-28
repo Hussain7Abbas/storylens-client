@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import type { SettingsStore } from "./config";
+import { z } from "zod";
+import { accountSchema, type SettingsStore } from "./config";
 import type { PromptService } from "./service";
 import { ClientError } from "./types";
 
@@ -60,6 +61,15 @@ export function createServer(settings: SettingsStore, service: PromptService) {
       reply.raw.end();
     }
   };
+  // The extension shares its Story Lens session so the crawler can read and save the reader's novels; null forgets it.
+  app.post("/AccountSession", async request => {
+    const parsed = z.object({ account: accountSchema.nullable() }).strict().safeParse(request.body);
+    if (!parsed.success) throw new ClientError("INVALID_REQUEST", "Expected { account: { apiUrl, token } | null } with an HTTPS API URL.", 400);
+    const current = settings.get().account;
+    const next = parsed.data.account;
+    if (current?.apiUrl !== next?.apiUrl || current?.token !== next?.token) await settings.update({ account: next });
+    return { connected: !!next };
+  });
   app.post("/ExecutePrompt", job((body, signal) => service.executePrompt(body, signal)));
   app.post("/GenerateImage", job((body, signal) => service.generateImage(body, signal)));
   return app;

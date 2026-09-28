@@ -1,9 +1,12 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, ipcMain, shell, Menu, nativeImage, Tray } from "electron";
+import { StoryLensApi } from "../backend/api";
 import { SettingsStore } from "../config";
+import { CrawlSession } from "../crawl/session";
 import { createServer } from "../server";
 import { PromptService } from "../service";
+import { ClientError } from "../types";
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
@@ -14,6 +17,18 @@ else {
   let service: PromptService | undefined;
   let status = "Starting local service…";
   const settings = new SettingsStore(join(app.getPath("userData"), "settings.json"));
+  const crawl = new CrawlSession({
+    account: () => settings.get().account,
+    execute: (input, signal) => {
+      if (!service) throw new ClientError("SERVICE_STOPPED", "The local AI service is not running.", 503);
+      return service.executePrompt(input, signal);
+    },
+    onChange: snapshot => window?.webContents.send("crawl:changed", snapshot),
+  });
+  const rowKey = (value: unknown): string => {
+    if (typeof value !== "string" || !value || value.length > 100) throw new Error("Invalid character.");
+    return value;
+  };
 
   function showWindow(): void {
     if (!window) return;
@@ -65,9 +80,13 @@ else {
   app.on("activate", showWindow);
   app.whenReady().then(async () => {
     await settings.load();
+    // The shared account arrives through the local service; refresh the window when it changes.
+    settings.onChange(() => window?.webContents.send("client:changed"));
     ipcMain.handle("client:state", async event => {
       fromWindow(event);
-      return { settings: settings.get(), status, capabilities: service ? await service.catalog() : null };
+      // The renderer never sees the account session token.
+      const { account, ...visible } = settings.get();
+      return { settings: visible, account: account ? { apiUrl: account.apiUrl } : null, status, capabilities: service ? await service.catalog() : null };
     });
     ipcMain.handle("client:save", async (event, patch: unknown) => {
       fromWindow(event);
@@ -80,7 +99,7 @@ else {
       if (current.port !== previous.port || current.claudePath !== previous.claudePath || current.codexPath !== previous.codexPath) {
         await stopServer();
         await startServer();
-        if (!server) { await settings.update(previous); await startServer(); throw new Error("Could not apply connection settings. Previous settings restored."); }
+        if (!server) { await settings.update({ port: previous.port, claudePath: previous.claudePath, codexPath: previous.codexPath }); await startServer(); throw new Error("Could not apply connection settings. Previous settings restored."); }
       }
       updateTray();
       return { status };
@@ -88,7 +107,22 @@ else {
     ipcMain.handle("client:rotate", async event => { fromWindow(event); service?.cancelAll(); await settings.rotate(); return settings.get().token; });
     ipcMain.handle("client:copy", async event => { fromWindow(event); clipboard.writeText(settings.get().token); });
     ipcMain.handle("client:refresh", async event => { fromWindow(event); return service?.refresh(); });
-    window = new BrowserWindow({ width: 760, height: 850, minWidth: 440, minHeight: 560, title: "Story Lens Client", backgroundColor: "#f7f7fb", autoHideMenuBar: true, webPreferences: {
+    ipcMain.handle("crawl:state", event => { fromWindow(event); return crawl.snapshot(); });
+    ipcMain.handle("crawl:novels", async event => {
+      fromWindow(event);
+      const account = settings.get().account;
+      if (!account) return [];
+      return (await new StoryLensApi(account).novels()).map(({ id, name }) => ({ id, name }));
+    });
+    ipcMain.handle("crawl:start", (event, input: unknown) => { fromWindow(event); return crawl.start(input); });
+    ipcMain.handle("crawl:stop", event => { fromWindow(event); crawl.stop(); return crawl.snapshot(); });
+    ipcMain.handle("crawl:resume", (event, pages: unknown) => { fromWindow(event); return crawl.resume(pages); });
+    ipcMain.handle("crawl:update", (event, key: unknown, patch: unknown) => { fromWindow(event); return crawl.updateRow(rowKey(key), patch); });
+    ipcMain.handle("crawl:remove", (event, key: unknown) => { fromWindow(event); return crawl.removeRow(rowKey(key)); });
+    ipcMain.handle("crawl:save", (event, key: unknown) => { fromWindow(event); return crawl.saveRow(rowKey(key)); });
+    ipcMain.handle("crawl:saveAll", event => { fromWindow(event); return crawl.saveAll(); });
+    ipcMain.handle("crawl:reset", event => { fromWindow(event); return crawl.reset(); });
+    window = new BrowserWindow({ width: 1080, height: 880, minWidth: 440, minHeight: 560, title: "Story Lens Client", backgroundColor: "#f7f7fb", autoHideMenuBar: true, webPreferences: {
       preload: join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true,
     } });
     window.webContents.setWindowOpenHandler(({ url }) => {
@@ -108,5 +142,5 @@ else {
     await window.loadFile(join(__dirname, "index.html"));
     await startServer();
   }).catch(error => { console.error("Story Lens Client startup failed", error); app.quit(); });
-  app.on("before-quit", () => { quitting = true; tray?.destroy(); tray = undefined; service?.cancelAll(); void server?.close(); });
+  app.on("before-quit", () => { quitting = true; tray?.destroy(); tray = undefined; crawl.cancel(); service?.cancelAll(); void server?.close(); });
 }
