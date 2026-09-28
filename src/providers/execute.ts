@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Settings } from "../config";
-import type { ModelOption, ResponseLanguage } from "../types";
+import type { ExecuteOptions, ModelOption, ResponseLanguage } from "../types";
 import { ClientError } from "../types";
 import { runCli, withWorkDir } from "./process";
 
@@ -41,18 +41,21 @@ export function parseCodexOutput(stdout: string): string {
   return result.trim();
 }
 
-export async function executeProvider(settings: Settings, model: ModelOption, effort: string, prompt: string, responseLanguage: ResponseLanguage, signal: AbortSignal): Promise<string> {
+export async function executeProvider(settings: Settings, model: ModelOption, effort: string, prompt: string, responseLanguage: ResponseLanguage, signal: AbortSignal, options: ExecuteOptions = {}): Promise<string> {
   return withWorkDir(async cwd => {
     const language = responseLanguage === "ar" ? "Arabic" : "English";
     const localizedPrompt = `Response language: ${language} (${responseLanguage}). Write the final answer in ${language}.\n\n${prompt}`;
     if (model.provider === "claude") {
-      const args = ["-p", "--model", model.providerModel, "--output-format", "json", "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "", "--settings", '{"disableAllHooks":true}', "--disable-slash-commands", "--no-session-persistence"];
+      // Web search requests only get the read-only web tools; every other request runs without tools.
+      const tools = options.webSearch ? ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"] : ["--tools", ""];
+      const args = ["-p", "--model", model.providerModel, "--output-format", "json", ...tools, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "", "--settings", '{"disableAllHooks":true}', "--disable-slash-commands", "--no-session-persistence"];
       if (effort !== "default") args.push("--effort", effort);
       const { stdout } = await runCli(settings.claudePath, args, localizedPrompt, { cwd, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
       return parseClaudeOutput(stdout);
     }
     const args = ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "-c", "mcp_servers={}", "-c", "project_doc_max_bytes=0", "--disable", "browser_use", "--disable", "computer_use", "--disable", "apps", "--disable", "plugins", "--disable", "hooks", "--disable", "shell_tool", "-m", model.providerModel];
     if (effort !== "default") args.push("-c", `model_reasoning_effort="${effort}"`);
+    args.push("-c", `web_search="${options.webSearch ? "live" : "disabled"}"`);
     args.push("-");
     const { stdout } = await runCli(settings.codexPath, args, localizedPrompt, { cwd, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
     return parseCodexOutput(stdout);

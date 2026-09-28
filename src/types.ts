@@ -15,8 +15,13 @@ export type Capabilities = {
   models: ModelOption[];
   providers: CapabilityStatus[];
   limits: { promptBytes: number; outputBytes: number; timeoutMs: number; concurrent: number };
+  /** Optional features; older clients omit this object. */
+  features: { webSearch: boolean; imageGeneration: boolean };
 };
-export type ExecuteInput = { prompt: string; model: string; effort: string; responseLanguage: ResponseLanguage };
+export type ExecuteInput = { prompt: string; model: string; effort: string; responseLanguage: ResponseLanguage; webSearch?: boolean };
+export type ExecuteOptions = { webSearch?: boolean };
+export type GeneratedImage = { mimeType: string; data: string; revisedPrompt?: string };
+export type GenerateImageOutput = GeneratedImage & { requestId: string; model: string; effort: string; durationMs: number };
 export type ExecuteOutput = {
   requestId: string;
   output: string;

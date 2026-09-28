@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { SettingsStore } from "./config";
 import type { PromptService } from "./service";
 import { ClientError } from "./types";
@@ -7,7 +7,7 @@ import { ClientError } from "./types";
 const extensionOrigin = /^(chrome-extension|moz-extension):\/\/[a-z0-9-]+$/i;
 
 export function createServer(settings: SettingsStore, service: PromptService) {
-  const app = Fastify({ bodyLimit: 1_000_000, logger: false, requestTimeout: 250_000 });
+  const app = Fastify({ bodyLimit: 1_000_000, logger: false, requestTimeout: 310_000 });
   app.addHook("onRequest", async (request, reply) => {
     const expectedHost = `127.0.0.1:${settings.get().port}`;
     if (request.headers.host !== expectedHost) throw new ClientError("BAD_HOST", "Invalid Host header.", 403);
@@ -32,13 +32,13 @@ export function createServer(settings: SettingsStore, service: PromptService) {
     reply.code(status === 499 ? 502 : status).send({ requestId: request.id, error: { code: known?.code ?? (status === 413 ? "BODY_TOO_LARGE" : "INTERNAL_ERROR"), message: known?.message ?? (status === 413 ? "Request is too large." : "Desktop client request failed."), retryable: status >= 429 } });
   });
   app.get("/capabilities", async () => service.catalog());
-  app.post("/ExecutePrompt", async (request, reply) => {
+  const job = <T extends object>(run: (body: unknown, signal: AbortSignal) => Promise<T>) => async (request: FastifyRequest, reply: FastifyReply) => {
     const controller = new AbortController();
     const disconnect = () => controller.abort();
     request.raw.on("aborted", disconnect);
     reply.raw.on("close", disconnect);
     if (!request.headers.accept?.includes("application/x-ndjson")) {
-      try { return await service.executePrompt(request.body, controller.signal); }
+      try { return await run(request.body, controller.signal); }
       finally { request.raw.off("aborted", disconnect); reply.raw.off("close", disconnect); }
     }
     reply.hijack();
@@ -48,7 +48,7 @@ export function createServer(settings: SettingsStore, service: PromptService) {
     send({ type: "started", requestId });
     const interval = setInterval(() => send({ type: "heartbeat", requestId }), 10_000);
     try {
-      const result = await service.executePrompt(request.body, controller.signal);
+      const result = await run(request.body, controller.signal);
       send({ type: "result", ...result, requestId });
     } catch (error) {
       const known = error instanceof ClientError ? error : undefined;
@@ -59,6 +59,8 @@ export function createServer(settings: SettingsStore, service: PromptService) {
       reply.raw.off("close", disconnect);
       reply.raw.end();
     }
-  });
+  };
+  app.post("/ExecutePrompt", job((body, signal) => service.executePrompt(body, signal)));
+  app.post("/GenerateImage", job((body, signal) => service.generateImage(body, signal)));
   return app;
 }

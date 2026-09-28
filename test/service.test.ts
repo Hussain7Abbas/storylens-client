@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SettingsStore } from "../src/config";
@@ -7,6 +7,7 @@ import { discoverCatalog } from "../src/providers/catalog";
 import { createServer } from "../src/server";
 import { PromptService } from "../src/service";
 import { executeProvider, parseClaudeOutput, parseCodexOutput } from "../src/providers/execute";
+import { imageMimeType, parseCodexImageEvents, resolveGeneratedImage } from "../src/providers/image";
 import type { ModelOption } from "../src/types";
 
 const model: ModelOption = { id: "codex:gpt-6-sol", provider: "codex", providerModel: "gpt-6-sol", label: "Sol", efforts: ["low", "medium"], defaultEffort: "medium", aliases: ["codex-sol6"] };
@@ -125,4 +126,46 @@ if (process.platform !== "win32") test("Codex catalog starts with a GUI-style PA
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
   }
+});
+
+const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(200, 1)]);
+
+test("image events yield inline results or saved paths, never other items", async () => {
+  const inline = parseCodexImageEvents(`{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n{"type":"item.completed","item":{"type":"image_generation","result":"${png.toString("base64")}","revised_prompt":"A portrait"}}\n`);
+  expect(inline.revisedPrompt).toBe("A portrait");
+  expect(imageMimeType(await resolveGeneratedImage(inline, [], Date.now()))).toBe("image/png");
+
+  const dir = await mkdtemp(join(tmpdir(), "storylens-image-test-")); dirs.push(dir);
+  const saved = join(dir, "thread", "image.png");
+  await mkdir(join(dir, "thread"));
+  await writeFile(saved, png);
+  const byPath = parseCodexImageEvents(`{"type":"item.completed","item":{"type":"imageGeneration","savedPath":${JSON.stringify(saved)}}}\n`);
+  expect((await resolveGeneratedImage(byPath, [dir], Date.now() + 60_000)).equals(png)).toBe(true);
+  const outside = parseCodexImageEvents(`{"type":"item.completed","item":{"type":"image_generation","saved_path":"/etc/passwd.png"}}\n`);
+  await expect(resolveGeneratedImage(outside, [join(dir, "missing")], Date.now())).rejects.toMatchObject({ code: "PROVIDER_RESULT" });
+  expect((await resolveGeneratedImage({ paths: [] }, [dir], 0)).equals(png)).toBe(true);
+});
+
+test("GenerateImage falls back to a Codex model and passes web search only when asked", async () => {
+  const claude: ModelOption = { ...model, id: "claude:sonnet", provider: "claude", providerModel: "sonnet", aliases: [] };
+  const dir = await mkdtemp(join(tmpdir(), "storylens-test-")); dirs.push(dir);
+  const settings = new SettingsStore(join(dir, "settings.json")); await settings.load();
+  let webSearch: boolean | undefined;
+  let imageModel = "", imageEffort = "";
+  const service = new PromptService(settings, async (_s, _m, _e, _p, _l, _signal, options) => { webSearch = options?.webSearch; return "ok"; },
+    async () => ({ models: [claude, model], providers: [] }),
+    async (_s, chosen, effort) => { imageModel = chosen.id; imageEffort = effort; return { mimeType: "image/png", data: png.toString("base64") }; });
+  const server = createServer(settings, service);
+  const headers = { host: `127.0.0.1:${settings.get().port}`, authorization: `Bearer ${settings.get().token}` };
+  expect((await server.inject({ method: "GET", url: "/capabilities", headers })).json().features).toEqual({ webSearch: true, imageGeneration: true });
+  await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hi", model: claude.id, effort: "low", responseLanguage: "en", webSearch: true } });
+  expect(webSearch).toBe(true);
+  const image = await server.inject({ method: "POST", url: "/GenerateImage", headers: { ...headers, accept: "application/x-ndjson" }, payload: { prompt: "A knight", model: claude.id, effort: "high" } });
+  const frames = image.body.trim().split("\n").map(line => JSON.parse(line));
+  expect(frames.map(frame => frame.type)).toEqual(["started", "result"]);
+  expect(frames[1].mimeType).toBe("image/png");
+  expect(imageModel).toBe(model.id);
+  expect(imageEffort).toBe(model.defaultEffort);
+  expect((await server.inject({ method: "POST", url: "/GenerateImage", headers, payload: { prompt: "" , model: model.id, effort: "low" } })).statusCode).toBe(400);
+  await server.close();
 });
