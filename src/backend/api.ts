@@ -1,5 +1,6 @@
 import type { Account } from "../config";
 import { ClientError } from "../types";
+import { CLIENT_VERSION } from "../version";
 
 export type LookupOption = { id: string; nameEn: string | null; nameAr: string | null; description: string | null };
 export type NovelSummary = { id: string; name: string; context: string | null };
@@ -28,6 +29,8 @@ const MAX_ITEMS = 20_000;
 const TIMEOUT_MS = 30_000;
 /** Reader API prefix; the shared `apiUrl` is the API origin. */
 export const USER_API_PREFIX = "/api/user";
+/** Lets the API refuse client releases it no longer supports (426 Upgrade Required). */
+export const CLIENT_VERSION_HEADER = "X-Client-Version";
 
 /** Encodes nested objects as `key[field]=value`, the form the extension's Axios client sends and the API parses. */
 export function encodeQuery(query: Query): string {
@@ -59,7 +62,7 @@ export class StoryLensApi {
     try {
       response = await this.fetchImpl(url, {
         method,
-        headers: { Authorization: `Bearer ${this.account.token}`, Accept: "application/json", "Accept-Language": this.language, ...(options.body === undefined ? {} : { "Content-Type": "application/json" }) },
+        headers: { Authorization: `Bearer ${this.account.token}`, Accept: "application/json", "Accept-Language": this.language, [CLIENT_VERSION_HEADER]: `desktop/${CLIENT_VERSION}`, ...(options.body === undefined ? {} : { "Content-Type": "application/json" }) },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: AbortSignal.any(signals),
         redirect: "error",
@@ -71,6 +74,7 @@ export class StoryLensApi {
     const data: unknown = await response.json().catch(() => null);
     if (!response.ok) {
       const message = data && typeof data === "object" && "message" in data && typeof data.message === "string" ? data.message : `Story Lens API returned HTTP ${response.status}.`;
+      if (response.status === 426) throw new ClientError("CLIENT_OUTDATED", `${message} Download the latest Story Lens Client.`, 426);
       if (response.status === 401) throw new ClientError("API_UNAUTHORIZED", "Your Story Lens session expired. Sign in to the extension again and click Connect / refresh models in Settings → AI.", 401);
       throw new ClientError("API_ERROR", message, response.status >= 500 ? 502 : response.status);
     }
