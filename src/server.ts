@@ -6,6 +6,12 @@ import type { PromptService } from "./service";
 import { ClientError } from "./types";
 
 const extensionOrigin = /^(chrome-extension|moz-extension):\/\/[a-z0-9-]+$/i;
+/** The Story Lens dashboard (production and its local dev server) may also call the client with the pairing token. */
+export const DASHBOARD_ORIGINS = new Set(["https://storylens-dashbaord.iscoded.com", "http://localhost:3040", "http://127.0.0.1:3040"]);
+
+export function isAllowedOrigin(origin: string): boolean {
+  return extensionOrigin.test(origin) || DASHBOARD_ORIGINS.has(origin);
+}
 
 export function createServer(settings: SettingsStore, service: PromptService) {
   const app = Fastify({ bodyLimit: 1_000_000, logger: false, requestTimeout: 310_000 });
@@ -13,15 +19,18 @@ export function createServer(settings: SettingsStore, service: PromptService) {
     const expectedHost = `127.0.0.1:${settings.get().port}`;
     if (request.headers.host !== expectedHost) throw new ClientError("BAD_HOST", "Invalid Host header.", 403);
     const origin = request.headers.origin;
-    if (origin && !extensionOrigin.test(origin)) throw new ClientError("BAD_ORIGIN", "Only browser extensions can connect.", 403);
+    if (origin && !isAllowedOrigin(origin)) throw new ClientError("BAD_ORIGIN", "Only the Story Lens extension and dashboard can connect.", 403);
     if (origin) {
       reply.header("Access-Control-Allow-Origin", origin);
       reply.header("Vary", "Origin");
       reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
       reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      // Chrome asks before a website reaches a loopback address (Private Network Access).
+      if (request.headers["access-control-request-private-network"] === "true") reply.header("Access-Control-Allow-Private-Network", "true");
     }
     reply.header("Cache-Control", "no-store");
-    if (request.method === "OPTIONS") { reply.code(204).send(); return reply; }
+    // Preflights carry no token; the OPTIONS route below answers them.
+    if (request.method === "OPTIONS") return;
     const bearer = request.headers.authorization?.replace(/^Bearer /, "");
     const actual = createHash("sha256").update(bearer ?? "").digest();
     const expected = createHash("sha256").update(settings.get().token).digest();
@@ -32,6 +41,7 @@ export function createServer(settings: SettingsStore, service: PromptService) {
     const status = known?.status ?? (error && typeof error === "object" && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500);
     reply.code(status === 499 ? 502 : status).send({ requestId: request.id, error: { code: known?.code ?? (status === 413 ? "BODY_TOO_LARGE" : "INTERNAL_ERROR"), message: known?.message ?? (status === 413 ? "Request is too large." : "Desktop client request failed."), retryable: status >= 429 } });
   });
+  app.options("*", async (_request, reply) => reply.code(204).send());
   app.get("/capabilities", async () => service.catalog());
   const job = <T extends object>(run: (body: unknown, signal: AbortSignal) => Promise<T>) => async (request: FastifyRequest, reply: FastifyReply) => {
     const controller = new AbortController();

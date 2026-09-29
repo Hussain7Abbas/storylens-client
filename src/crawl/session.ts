@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type LookupOption, StoryLensApi } from "../backend/api";
+import { type ApiLanguage, type LookupOption, StoryLensApi } from "../backend/api";
 import type { Account } from "../config";
 import type { ExecuteOutput, ResponseLanguage } from "../types";
 import { ClientError } from "../types";
@@ -64,7 +64,7 @@ export type CrawlDependencies = {
   account: () => Account | null;
   execute: (input: ExecuteRequest, signal: AbortSignal) => Promise<ExecuteOutput>;
   fetchPage?: (url: string, signal: AbortSignal) => Promise<WikiPage>;
-  api?: (account: Account) => StoryLensApi;
+  api?: (account: Account, language: ApiLanguage) => StoryLensApi;
   onChange: (snapshot: CrawlSnapshot) => void;
   /** Wait between retries while the provider is busy; shortened in tests. */
   busyDelayMs?: number;
@@ -111,10 +111,12 @@ export class CrawlSession {
   }
   isBusy(): boolean { return this.status === "preparing" || this.status === "running" || this.status === "stopping"; }
   private emit(): void { this.deps.onChange(this.snapshot()); }
+  /** Names are read and saved in the crawl's response language. */
   private api(): StoryLensApi {
     const account = this.deps.account();
     if (!account) throw new ClientError("NO_ACCOUNT", "Share your Story Lens account first: sign in to the extension, then click Connect / refresh models in Settings → AI.", 409);
-    return (this.deps.api ?? (value => new StoryLensApi(value)))(account);
+    const language = this.options?.responseLanguage ?? "en";
+    return (this.deps.api ?? ((value, lang) => new StoryLensApi(value, fetch, lang)))(account, language);
   }
 
   /** Starts a new crawl, replacing the previous table. Resolves once the crawl is running. */
@@ -124,11 +126,11 @@ export class CrawlSession {
     if (!parsed.success) throw new ClientError("INVALID_REQUEST", parsed.error.issues[0]?.message ?? "Invalid crawl settings.", 400);
     const startUrl = normalizeWikiUrl(parsed.data.url);
     if (!startUrl) throw new ClientError("BAD_URL", "Use a public http(s) wiki address.", 400);
+    this.options = { model: parsed.data.model, effort: parsed.data.effort, responseLanguage: parsed.data.responseLanguage };
     const api = this.api();
     this.status = "preparing"; this.message = "Loading the novel, categories and natures…";
     this.startUrl = startUrl; this.maxPages = parsed.data.maxPages;
     this.phases = []; this.queue = [startUrl]; this.visited.clear(); this.rows = []; this.novel = null;
-    this.options = { model: parsed.data.model, effort: parsed.data.effort, responseLanguage: parsed.data.responseLanguage };
     this.controller = new AbortController();
     const signal = this.controller.signal;
     this.emit();

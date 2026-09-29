@@ -35,6 +35,17 @@ describe("ExecutePrompt boundary", () => {
     expect(calls).toBe(0);
     await server.close();
   });
+  test("lets the dashboard origin connect with the pairing token only", async () => {
+    const { server, headers } = await fixture(async () => "ok");
+    const origin = "https://storylens-dashbaord.iscoded.com";
+    const preflight = await server.inject({ method: "OPTIONS", url: "/capabilities", headers: { host: headers.host, origin, "access-control-request-private-network": "true" } });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe(origin);
+    expect(preflight.headers["access-control-allow-private-network"]).toBe("true");
+    expect((await server.inject({ method: "GET", url: "/capabilities", headers: { host: headers.host, origin } })).statusCode).toBe(401);
+    expect((await server.inject({ method: "GET", url: "/capabilities", headers: { ...headers, origin } })).statusCode).toBe(200);
+    await server.close();
+  });
   test("validates dynamic model effort and returns final text", async () => {
     const { server, headers } = await fixture();
     const unknown = await server.inject({ method: "POST", url: "/ExecutePrompt", headers, payload: { prompt: "hello", model: model.id, effort: "max", responseLanguage: "en" } });

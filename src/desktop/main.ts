@@ -112,7 +112,10 @@ else {
       fromWindow(event);
       const account = settings.get().account;
       if (!account) return [];
-      return (await new StoryLensApi(account).novels()).map(({ id, name }) => ({ id, name }));
+      // Novels named in either language; the crawl then works in its response language.
+      const lists = await Promise.all((["en", "ar"] as const).map(language => new StoryLensApi(account, fetch, language).novels()));
+      const byId = new Map(lists.flat().map(({ id, name }) => [id, { id, name }]));
+      return [...byId.values()];
     });
     ipcMain.handle("crawl:start", (event, input: unknown) => { fromWindow(event); return crawl.start(input); });
     ipcMain.handle("crawl:stop", event => { fromWindow(event); crawl.stop(); return crawl.snapshot(); });

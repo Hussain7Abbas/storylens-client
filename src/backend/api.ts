@@ -13,6 +13,12 @@ export type NewKeyword = { novelId: string; name: string; description?: string; 
 export type NewAlias = { keywordId: string; name: string; description?: string };
 export type NewVersion = { keywordId: string; description?: string; currentChapter: number };
 
+/** Novel and keyword names are stored per language; the API only lists those named in `Accept-Language`. */
+export type ApiLanguage = "en" | "ar";
+type TranslatedName = { nameAr: string | null; nameEn: string | null };
+type ApiNovel = TranslatedName & { id: string; context: string | null };
+type ApiKeyword = TranslatedName & { id: string; aliases: { name: string }[]; versions: { startingChapter: number }[] };
+
 type Query = Record<string, string | number | Record<string, string | number | undefined> | undefined>;
 type Page<T> = { data: T[]; total: number };
 
@@ -38,7 +44,13 @@ export function encodeQuery(query: Query): string {
 
 /** Story Lens API client for the session the extension shared. Runs in the main process only. */
 export class StoryLensApi {
-  constructor(private readonly account: Account, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(private readonly account: Account, private readonly fetchImpl: typeof fetch = fetch, private readonly language: ApiLanguage = "en") {}
+
+  private get nameField(): "nameAr" | "nameEn" { return this.language === "ar" ? "nameAr" : "nameEn"; }
+  private nameOf(item: TranslatedName): string { return item[this.nameField] ?? item.nameAr ?? item.nameEn ?? ""; }
+  private toKeyword(keyword: ApiKeyword): ExistingKeyword {
+    return { id: keyword.id, name: this.nameOf(keyword), aliases: keyword.aliases.map(alias => ({ name: alias.name })), versions: keyword.versions.map(version => ({ startingChapter: version.startingChapter })) };
+  }
 
   private async request<T>(method: "GET" | "POST", path: string, options: { query?: Query; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
     const url = `${this.account.apiUrl.replace(/\/+$/, "")}${USER_API_PREFIX}${path}${encodeQuery(options.query ?? {})}`;
@@ -47,7 +59,7 @@ export class StoryLensApi {
     try {
       response = await this.fetchImpl(url, {
         method,
-        headers: { Authorization: `Bearer ${this.account.token}`, Accept: "application/json", "Accept-Language": "en", ...(options.body === undefined ? {} : { "Content-Type": "application/json" }) },
+        headers: { Authorization: `Bearer ${this.account.token}`, Accept: "application/json", "Accept-Language": this.language, ...(options.body === undefined ? {} : { "Content-Type": "application/json" }) },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: AbortSignal.any(signals),
         redirect: "error",
@@ -76,12 +88,12 @@ export class StoryLensApi {
   }
 
   async novels(signal?: AbortSignal): Promise<NovelSummary[]> {
-    const novels = await this.all<NovelSummary>("/novels/", { sorting: { column: "name", direction: "asc" } }, signal);
-    return novels.map(({ id, name, context }) => ({ id, name, context: context ?? null }));
+    const novels = await this.all<ApiNovel>("/novels/", { sorting: { column: "name", direction: "asc" } }, signal);
+    return novels.map(novel => ({ id: novel.id, name: this.nameOf(novel), context: novel.context ?? null }));
   }
   async createNovel(name: string, signal?: AbortSignal): Promise<NovelSummary> {
-    const novel = await this.request<NovelSummary>("POST", "/novels/", { body: { name }, signal });
-    return { id: novel.id, name: novel.name, context: novel.context ?? null };
+    const novel = await this.request<ApiNovel>("POST", "/novels/", { body: { [this.nameField]: name }, signal });
+    return { id: novel.id, name: this.nameOf(novel), context: novel.context ?? null };
   }
   async categories(signal?: AbortSignal): Promise<LookupOption[]> {
     return this.all<LookupOption>("/keyword-categories/", { sorting: { column: "createdAt", direction: "asc" } }, signal);
@@ -90,12 +102,12 @@ export class StoryLensApi {
     return this.all<LookupOption>("/keyword-natures/", { sorting: { column: "createdAt", direction: "asc" } }, signal);
   }
   async keywords(novelId: string, signal?: AbortSignal): Promise<ExistingKeyword[]> {
-    const keywords = await this.all<ExistingKeyword>("/keywords/", { sorting: { column: "name", direction: "asc" }, query: { novelId } }, signal);
-    return keywords.map(({ id, name, aliases, versions }) => ({ id, name, aliases: aliases.map(alias => ({ name: alias.name })), versions: versions.map(version => ({ startingChapter: version.startingChapter })) }));
+    const keywords = await this.all<ApiKeyword>("/keywords/", { sorting: { column: "name", direction: "asc" }, query: { novelId } }, signal);
+    return keywords.map(keyword => this.toKeyword(keyword));
   }
-  async createKeyword(input: NewKeyword): Promise<ExistingKeyword> {
-    const keyword = await this.request<ExistingKeyword>("POST", "/keywords/", { body: { ...input, matchingType: "FULL" } });
-    return { id: keyword.id, name: keyword.name, aliases: keyword.aliases.map(alias => ({ name: alias.name })), versions: keyword.versions.map(version => ({ startingChapter: version.startingChapter })) };
+  async createKeyword({ name, ...input }: NewKeyword): Promise<ExistingKeyword> {
+    const keyword = await this.request<ApiKeyword>("POST", "/keywords/", { body: { ...input, [this.nameField]: name, matchingType: "FULL" } });
+    return this.toKeyword(keyword);
   }
   async createAlias(input: NewAlias): Promise<void> {
     await this.request("POST", "/keyword-aliases/", { body: { ...input, matchingType: "FULL", overrideStyle: false } });
