@@ -18,7 +18,14 @@ export type NewVersion = { keywordId: string; description?: string; currentChapt
 export type ApiLanguage = "en" | "ar";
 type TranslatedName = { nameAr: string | null; nameEn: string | null };
 type ApiNovel = TranslatedName & { id: string; context: string | null };
-type ApiKeyword = TranslatedName & { id: string; aliases: { name: string }[]; versions: { startingChapter: number }[] };
+/** Aliases may carry their name in each language (`nameAr`/`nameEn`); older APIs send `name` only. */
+type ApiAlias = { name: string; nameAr?: string | null; nameEn?: string | null };
+type ApiKeyword = TranslatedName & { id: string; aliases: ApiAlias[]; versions: { startingChapter: number }[] };
+
+/** Every distinct name of an alias, so a translated alias counts as already stored. */
+export function aliasNamesOf(alias: ApiAlias): string[] {
+  return [...new Set([alias.name, alias.nameAr, alias.nameEn].filter((name): name is string => !!name?.trim()))];
+}
 
 type Query = Record<string, string | number | Record<string, string | number | undefined> | undefined>;
 type Page<T> = { data: T[]; total: number };
@@ -52,7 +59,7 @@ export class StoryLensApi {
   private get nameField(): "nameAr" | "nameEn" { return this.language === "ar" ? "nameAr" : "nameEn"; }
   private nameOf(item: TranslatedName): string { return item[this.nameField] ?? item.nameAr ?? item.nameEn ?? ""; }
   private toKeyword(keyword: ApiKeyword): ExistingKeyword {
-    return { id: keyword.id, name: this.nameOf(keyword), aliases: keyword.aliases.map(alias => ({ name: alias.name })), versions: keyword.versions.map(version => ({ startingChapter: version.startingChapter })) };
+    return { id: keyword.id, name: this.nameOf(keyword), aliases: keyword.aliases.flatMap(alias => aliasNamesOf(alias).map(name => ({ name }))), versions: keyword.versions.map(version => ({ startingChapter: version.startingChapter })) };
   }
 
   private async request<T>(method: "GET" | "POST", path: string, options: { query?: Query; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {

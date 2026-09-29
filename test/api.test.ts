@@ -36,6 +36,24 @@ describe("StoryLensApi", () => {
     expect(requests[1]?.body).not.toHaveProperty("name");
   });
 
+  test("counts an alias's translations as stored names", async () => {
+    const keyword = {
+      id: "k1",
+      nameAr: null,
+      nameEn: "Mira",
+      aliases: [
+        { name: "Little Mira", nameAr: "ميرا الصغيرة", nameEn: "Little Mira" },
+        // Older APIs and aliases send `name` only.
+        { name: "Mimi" },
+      ],
+      versions: [],
+    };
+    const fakeFetch = (async () => new Response(JSON.stringify({ data: [keyword], total: 1 }), { status: 200 })) as unknown as typeof fetch;
+    const api = new StoryLensApi({ apiUrl: "https://api.storylens.example", token: "t" }, fakeFetch);
+
+    expect((await api.keywords("n1"))[0]?.aliases).toEqual([{ name: "Little Mira" }, { name: "ميرا الصغيرة" }, { name: "Mimi" }]);
+  });
+
   test("reports its version and surfaces the API's upgrade requirement", async () => {
     const versions: (string | null)[] = [];
     const fakeFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
