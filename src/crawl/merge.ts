@@ -26,11 +26,6 @@ export type CharacterRow = {
   notes: string[];
 };
 
-const ENTITIES: Record<string, string> = { "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#x27;": "'", "&amp;": "&" };
-/** The API escapes HTML characters in stored text; comparisons need the plain text back. */
-export function decodeStoredText(value: string): string {
-  return value.replace(/&(lt|gt|quot|amp|#x27);/g, entity => ENTITIES[entity]);
-}
 const lower = (value: string) => value.trim().toLowerCase();
 
 export function rowNames(row: Pick<CharacterRow, "name" | "aliases">): string[] {
@@ -79,11 +74,11 @@ function findRow(context: MergeContext, names: string[]): CharacterRow | undefin
 /** A table row for a keyword the novel already has, created the first time a page mentions it. */
 function existingRow(context: MergeContext, names: string[]): CharacterRow | undefined {
   const keys = new Set(names.map(lower).filter(Boolean));
-  const keyword = context.existing.find(item => [item.name, ...item.aliases.map(alias => alias.name)].some(name => keys.has(lower(decodeStoredText(name)))));
+  const keyword = context.existing.find(item => [item.name, ...item.aliases.map(alias => alias.name)].some(name => keys.has(lower(name))));
   if (!keyword) return undefined;
-  const row = findRow(context, [decodeStoredText(keyword.name)]);
+  const row = findRow(context, [keyword.name]);
   if (row) return row;
-  const names2 = [keyword.name, ...keyword.aliases.map(alias => alias.name)].map(decodeStoredText);
+  const names2 = [keyword.name, ...keyword.aliases.map(alias => alias.name)];
   const created: CharacterRow = {
     key: context.nextKey(), name: names2[0], description: "", aliases: names2.slice(1), versions: [], sources: [],
     keywordId: keyword.id, savedNames: names2.map(lower), savedChapters: keyword.versions.map(version => version.startingChapter),

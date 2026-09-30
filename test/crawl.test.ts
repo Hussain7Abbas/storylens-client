@@ -116,7 +116,7 @@ describe("character table", () => {
 
 class FakeApi {
   created: { keywords: NewKeyword[]; aliases: NewAlias[]; versions: NewVersion[]; novels: string[] } = { keywords: [], aliases: [], versions: [], novels: [] };
-  async novels() { return [{ id: NOVEL_ID, name: "Tales &amp; Songs", context: null }]; }
+  async novels() { return [{ id: NOVEL_ID, name: "Tales & Songs", context: null }]; }
   async createNovel(name: string) { this.created.novels.push(name); return { id: NOVEL_ID, name, context: null }; }
   async categories() { return categories; }
   async natures() { return natures; }

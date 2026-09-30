@@ -18,13 +18,24 @@ export type NewVersion = { keywordId: string; description?: string; currentChapt
 export type ApiLanguage = "en" | "ar";
 type TranslatedName = { nameAr: string | null; nameEn: string | null };
 type ApiNovel = TranslatedName & { id: string; context: string | null };
-/** Aliases may carry their name in each language (`nameAr`/`nameEn`); older APIs send `name` only. */
-type ApiAlias = { name: string; nameAr?: string | null; nameEn?: string | null };
+/** Aliases are named per language (`nameAr`/`nameEn`), like keywords. */
+type ApiAlias = TranslatedName;
 type ApiKeyword = TranslatedName & { id: string; aliases: ApiAlias[]; versions: { startingChapter: number }[] };
 
 /** Every distinct name of an alias, so a translated alias counts as already stored. */
 export function aliasNamesOf(alias: ApiAlias): string[] {
-  return [...new Set([alias.name, alias.nameAr, alias.nameEn].filter((name): name is string => !!name?.trim()))];
+  return [...new Set([alias.nameAr, alias.nameEn].filter((name): name is string => !!name?.trim()))];
+}
+
+/** An API failure; `apiCode` is the API's machine-readable reason (`KEYWORD_NAME_TAKEN`, …). */
+export class ApiError extends ClientError {
+  constructor(message: string, status: number, public readonly apiCode?: string) {
+    super("API_ERROR", message, status);
+  }
+}
+
+function isApiCode(error: unknown, code: string): boolean {
+  return error instanceof ApiError && error.apiCode === code;
 }
 
 type Query = Record<string, string | number | Record<string, string | number | undefined> | undefined>;
@@ -83,7 +94,8 @@ export class StoryLensApi {
       const message = data && typeof data === "object" && "message" in data && typeof data.message === "string" ? data.message : `Story Lens API returned HTTP ${response.status}.`;
       if (response.status === 426) throw new ClientError("CLIENT_OUTDATED", `${message} Download the latest Story Lens Client.`, 426);
       if (response.status === 401) throw new ClientError("API_UNAUTHORIZED", "Your Story Lens session expired. Sign in to the extension again and click Connect / refresh models in Settings → AI.", 401);
-      throw new ClientError("API_ERROR", message, response.status >= 500 ? 502 : response.status);
+      const apiCode = data && typeof data === "object" && "code" in data && typeof data.code === "string" ? data.code : undefined;
+      throw new ApiError(message, response.status >= 500 ? 502 : response.status, apiCode);
     }
     return data as T;
   }
@@ -116,14 +128,32 @@ export class StoryLensApi {
     const keywords = await this.all<ApiKeyword>("/keywords/", { sorting: { column: "name", direction: "asc" }, query: { novelId } }, signal);
     return keywords.map(keyword => this.toKeyword(keyword));
   }
+  /**
+   * Creates a keyword with client IDs for it and its base version, so a resend after a
+   * lost response returns the same keyword. When another keyword already has the name
+   * (`KEYWORD_NAME_TAKEN`), returns that one instead.
+   */
   async createKeyword({ name, ...input }: NewKeyword): Promise<ExistingKeyword> {
-    const keyword = await this.request<ApiKeyword>("POST", "/keywords/", { body: { ...input, [this.nameField]: name, matchingType: "FULL" } });
-    return this.toKeyword(keyword);
+    const body = { ...input, id: crypto.randomUUID(), versionId: crypto.randomUUID(), [this.nameField]: name, matchingType: "FULL" };
+    try {
+      return this.toKeyword(await this.request<ApiKeyword>("POST", "/keywords/", { body }));
+    } catch (error) {
+      if (!isApiCode(error, "KEYWORD_NAME_TAKEN")) throw error;
+      const existing = (await this.keywords(input.novelId)).find(keyword => keyword.name.toLowerCase() === name.toLowerCase());
+      if (!existing) throw error;
+      return existing;
+    }
   }
-  async createAlias(input: NewAlias): Promise<void> {
-    await this.request("POST", "/keyword-aliases/", { body: { ...input, matchingType: "FULL", overrideStyle: false } });
+  /** Adds an alias named in the crawl's language; one that already exists (`ALIAS_NAME_TAKEN`) counts as saved. */
+  async createAlias({ name, ...input }: NewAlias): Promise<void> {
+    const body = { ...input, id: crypto.randomUUID(), [this.nameField]: name, matchingType: "FULL", overrideStyle: false };
+    try {
+      await this.request("POST", "/keyword-aliases/", { body });
+    } catch (error) {
+      if (!isApiCode(error, "ALIAS_NAME_TAKEN")) throw error;
+    }
   }
   async createVersion(input: NewVersion): Promise<void> {
-    await this.request("POST", "/keyword-versions/", { body: input });
+    await this.request("POST", "/keyword-versions/", { body: { ...input, id: crypto.randomUUID() } });
   }
 }

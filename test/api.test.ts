@@ -42,16 +42,48 @@ describe("StoryLensApi", () => {
       nameAr: null,
       nameEn: "Mira",
       aliases: [
-        { name: "Little Mira", nameAr: "ميرا الصغيرة", nameEn: "Little Mira" },
-        // Older APIs and aliases send `name` only.
-        { name: "Mimi" },
+        { nameAr: "ميرا الصغيرة", nameEn: "Little Mira" },
+        { nameAr: null, nameEn: "Mimi" },
       ],
       versions: [],
     };
     const fakeFetch = (async () => new Response(JSON.stringify({ data: [keyword], total: 1 }), { status: 200 })) as unknown as typeof fetch;
     const api = new StoryLensApi({ apiUrl: "https://api.storylens.example", token: "t" }, fakeFetch);
 
-    expect((await api.keywords("n1"))[0]?.aliases).toEqual([{ name: "Little Mira" }, { name: "ميرا الصغيرة" }, { name: "Mimi" }]);
+    expect((await api.keywords("n1"))[0]?.aliases).toEqual([{ name: "ميرا الصغيرة" }, { name: "Little Mira" }, { name: "Mimi" }]);
+  });
+
+  test("sends client IDs and names aliases in its language", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fakeFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ id: "k1", nameAr: "لين", nameEn: null, aliases: [], versions: [] }), { status: 200 });
+    }) as typeof fetch;
+    const api = new StoryLensApi({ apiUrl: "https://api.storylens.example", token: "t" }, fakeFetch, "ar");
+    const uuid = /^[0-9a-f-]{36}$/;
+
+    await api.createKeyword({ novelId: "n1", name: "لين", categoryId: "c", natureId: "n" });
+    await api.createAlias({ keywordId: "k1", name: "لينا" });
+    await api.createVersion({ keywordId: "k1", currentChapter: 4 });
+
+    expect(bodies[0]).toMatchObject({ id: expect.stringMatching(uuid), versionId: expect.stringMatching(uuid) });
+    expect(bodies[1]).toMatchObject({ id: expect.stringMatching(uuid), keywordId: "k1", nameAr: "لينا" });
+    expect(bodies[1]).not.toHaveProperty("name");
+    expect(bodies[2]).toMatchObject({ id: expect.stringMatching(uuid), currentChapter: 4 });
+  });
+
+  test("treats a taken name as already saved", async () => {
+    const existing = { id: "k-existing", nameAr: null, nameEn: "Aria", aliases: [], versions: [{ startingChapter: 0 }] };
+    const fakeFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "GET") return new Response(JSON.stringify({ data: [existing], total: 1 }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { keywordId?: string };
+      const code = body.keywordId ? "ALIAS_NAME_TAKEN" : "KEYWORD_NAME_TAKEN";
+      return new Response(JSON.stringify({ message: "taken", code }), { status: 409 });
+    }) as typeof fetch;
+    const api = new StoryLensApi({ apiUrl: "https://api.storylens.example", token: "t" }, fakeFetch);
+
+    expect((await api.createKeyword({ novelId: "n1", name: "aria", categoryId: "c", natureId: "n" })).id).toBe("k-existing");
+    expect(await api.createAlias({ keywordId: "k-existing", name: "Sparrow" })).toBeUndefined();
   });
 
   test("reports its version and surfaces the API's upgrade requirement", async () => {
