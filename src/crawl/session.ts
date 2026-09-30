@@ -3,7 +3,7 @@ import { type ApiLanguage, type LookupOption, StoryLensApi } from "../backend/ap
 import type { Account } from "../config";
 import type { ExecuteOutput, ResponseLanguage } from "../types";
 import { ClientError } from "../types";
-import { type CharacterRow, decodeStoredText, hasPendingWork, mergePageCharacters, pendingAliases, pendingVersions, rowNames } from "./merge";
+import { type CharacterRow, hasPendingWork, mergePageCharacters, pendingAliases, pendingVersions, rowNames } from "./merge";
 import { fetchWikiPage, normalizeWikiUrl, type WikiPage } from "./page";
 import { buildWikiPagePrompt, parseWikiPageResult } from "./prompt";
 
@@ -137,7 +137,7 @@ export class CrawlSession {
     try {
       const novel = parsed.data.novelId ? (await api.novels(signal)).find(item => item.id === parsed.data.novelId) : await api.createNovel(parsed.data.newNovelName as string, signal);
       if (!novel) throw new ClientError("NOVEL_NOT_FOUND", "The selected novel no longer exists.", 404);
-      this.novel = { id: novel.id, name: decodeStoredText(novel.name), context: decodeStoredText(novel.context ?? "") };
+      this.novel = { id: novel.id, name: novel.name, context: novel.context ?? "" };
       [this.categories, this.natures, this.existing] = await Promise.all([api.categories(signal), api.natures(signal), api.keywords(novel.id, signal)]);
       if (!this.categories.length || !this.natures.length) throw new ClientError("NO_LOOKUPS", "The API returned no categories or natures.", 502);
     } catch (error) {
@@ -180,7 +180,7 @@ export class CrawlSession {
   }
 
   private knownNames(): string[] {
-    return [...this.existing.flatMap(keyword => [keyword.name, ...keyword.aliases.map(alias => alias.name)].map(decodeStoredText)), ...this.rows.flatMap(rowNames)];
+    return [...this.existing.flatMap(keyword => [keyword.name, ...keyword.aliases.map(alias => alias.name)]), ...this.rows.flatMap(rowNames)];
   }
 
   private async execute(prompt: string, signal: AbortSignal): Promise<string> {
@@ -295,7 +295,7 @@ export class CrawlSession {
     this.emit();
     try {
       if (!row.keywordId) {
-        const duplicate = this.existing.find(keyword => decodeStoredText(keyword.name).toLowerCase() === row.name.toLowerCase());
+        const duplicate = this.existing.find(keyword => keyword.name.toLowerCase() === row.name.toLowerCase());
         if (duplicate) throw new ClientError("DUPLICATE", `“${row.name}” already exists in this novel. Rename it or remove this row.`, 409);
         const keyword = await api.createKeyword({ novelId: this.novel.id, name: row.name, description: row.description || undefined, categoryId: row.categoryId as string, natureId: row.natureId as string });
         row.keywordId = keyword.id;
