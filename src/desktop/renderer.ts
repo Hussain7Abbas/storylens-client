@@ -4,7 +4,7 @@ import type { CharacterRow } from "../crawl/merge";
 import type { CrawlSnapshot, RowPatch } from "../crawl/session";
 import type { Capabilities } from "../types";
 
-type EditableSettings = Pick<Settings, "port" | "claudePath" | "codexPath" | "keepInSystemTray">;
+type EditableSettings = Pick<Settings, "port" | "claudePath" | "codexPath" | "geminiPath" | "keepInSystemTray">;
 type State = { settings: Omit<Settings, "account">; account: { apiUrl: string } | null; status: string; capabilities: Capabilities | null };
 type NovelOption = { id: string; name: string };
 declare global {
@@ -101,6 +101,7 @@ async function render(): Promise<void> {
     byId<HTMLInputElement>("port").value = String(state.settings.port);
     byId<HTMLInputElement>("claudePath").value = state.settings.claudePath;
     byId<HTMLInputElement>("codexPath").value = state.settings.codexPath;
+    byId<HTMLInputElement>("geminiPath").value = state.settings.geminiPath;
     byId<HTMLInputElement>("keepInSystemTray").checked = state.settings.keepInSystemTray;
   }
   const providers = byId<HTMLElement>("providers");
@@ -110,7 +111,7 @@ async function render(): Promise<void> {
     const heading = document.createElement("div");
     heading.className = "provider-name";
     const name = document.createElement("span");
-    name.textContent = provider.provider === "claude" ? "Claude Code" : "Codex";
+    name.textContent = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI" }[provider.provider];
     const badge = document.createElement("span");
     badge.className = "provider-state";
     badge.dataset.ready = String(provider.available);
@@ -141,7 +142,7 @@ async function runAction(button: HTMLButtonElement, action: () => Promise<void>,
 form.addEventListener("submit", event => {
   event.preventDefault();
   void runAction(byId<HTMLButtonElement>("save"), async () => {
-    await window.storyLensClient.save({ port: Number(byId<HTMLInputElement>("port").value), claudePath: byId<HTMLInputElement>("claudePath").value, codexPath: byId<HTMLInputElement>("codexPath").value, keepInSystemTray: byId<HTMLInputElement>("keepInSystemTray").checked });
+    await window.storyLensClient.save({ port: Number(byId<HTMLInputElement>("port").value), claudePath: byId<HTMLInputElement>("claudePath").value, codexPath: byId<HTMLInputElement>("codexPath").value, geminiPath: byId<HTMLInputElement>("geminiPath").value, keepInSystemTray: byId<HTMLInputElement>("keepInSystemTray").checked });
     dirty = false;
     message.textContent = "Settings saved.";
     await render();

@@ -1,4 +1,4 @@
-export type ProviderName = "claude" | "codex";
+export type ProviderName = "claude" | "codex" | "gemini";
 export type ResponseLanguage = "en" | "ar";
 export type ModelOption = {
   id: string;

@@ -58,13 +58,13 @@ export async function withWorkDir<T>(fn: (dir: string) => Promise<T>): Promise<T
 }
 
 export async function runCli(
-  command: string, args: string[], input: string, options: { signal?: AbortSignal; timeoutMs: number; cwd: string; maxBytes?: number },
+  command: string, args: string[], input: string, options: { signal?: AbortSignal; timeoutMs: number; cwd: string; maxBytes?: number; env?: NodeJS.ProcessEnv },
 ): Promise<{ stdout: string; stderr: string }> {
   const path = await executablePath(command);
   const child = spawn(path, args, {
     cwd: options.cwd, stdio: "pipe", windowsHide: true, detached: process.platform !== "win32",
     shell: process.platform === "win32" && path.toLowerCase().endsWith(".cmd"),
-    env: cliEnvironment(path),
+    env: { ...cliEnvironment(path), ...options.env },
   });
   const maxBytes = options.maxBytes ?? 2_000_000;
   const stdoutChunks: Buffer[] = [], stderrChunks: Buffer[] = [];

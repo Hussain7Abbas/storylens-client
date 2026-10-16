@@ -340,6 +340,7 @@ if (process.platform !== "win32")
 				token: "test",
 				claudePath: "/missing-claude",
 				codexPath: codex,
+				geminiPath: "/missing-gemini",
 				extraModels: [],
 			});
 			expect(

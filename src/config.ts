@@ -18,8 +18,9 @@ const schema = z.object({
   keepInSystemTray: z.boolean().default(true),
   claudePath: z.string().max(1024).default("claude"),
   codexPath: z.string().max(1024).default("codex"),
+  geminiPath: z.string().min(1).max(1024).default("gemini"),
   account: accountSchema.nullable().default(null),
-  extraModels: z.array(z.object({ provider: z.enum(["claude", "codex"]), model: z.string().regex(/^[a-zA-Z0-9.:[\]-]+$/), label: z.string().min(1).max(100), efforts: z.array(z.enum(["default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])).min(1) })).default([]),
+  extraModels: z.array(z.object({ provider: z.enum(["claude", "codex", "gemini"]), model: z.string().regex(/^[a-zA-Z0-9.:[\]-]+$/), label: z.string().min(1).max(100), efforts: z.array(z.enum(["default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])).min(1) }).refine(entry => entry.provider !== "gemini" || entry.efforts.every(effort => effort === "default"), "Gemini CLI supports default effort only.")).default([]),
 }).strict();
 export type Settings = z.infer<typeof schema>;
 

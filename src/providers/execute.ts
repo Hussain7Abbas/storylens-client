@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Settings } from "../config";
 import type { ExecuteOptions, ModelOption, ResponseLanguage } from "../types";
 import { ClientError } from "../types";
+import { geminiEnvironment, parseGeminiOutput } from "./gemini";
 import { runCli, withWorkDir } from "./process";
 
 const claudeResult = z.object({ type: z.literal("result"), is_error: z.boolean().optional(), result: z.string().optional(), subtype: z.string().optional() });
@@ -52,6 +53,14 @@ export async function executeProvider(settings: Settings, model: ModelOption, ef
       if (effort !== "default") args.push("--effort", effort);
       const { stdout } = await runCli(settings.claudePath, args, localizedPrompt, { cwd, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
       return parseClaudeOutput(stdout);
+    }
+    if (model.provider === "gemini") {
+      if (effort !== "default") throw new ClientError("UNSUPPORTED_EFFORT", "Gemini CLI supports default effort only.", 422);
+      const env = await geminiEnvironment(cwd, options.webSearch);
+      const args = ["--model", model.providerModel, "--output-format", "json", "--approval-mode", "default", "--extensions", "none"];
+      if (options.webSearch) args.push("--allowed-tools", "google_web_search,web_fetch");
+      const { stdout } = await runCli(settings.geminiPath, args, localizedPrompt.replaceAll("@", "\\@"), { cwd, env, signal, timeoutMs: 240_000, maxBytes: 1_500_000 });
+      return parseGeminiOutput(stdout);
     }
     const args = ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "-c", "mcp_servers={}", "-c", "project_doc_max_bytes=0", "--disable", "browser_use", "--disable", "computer_use", "--disable", "apps", "--disable", "plugins", "--disable", "hooks", "--disable", "shell_tool", "-m", model.providerModel];
     if (effort !== "default") args.push("-c", `model_reasoning_effort="${effort}"`);

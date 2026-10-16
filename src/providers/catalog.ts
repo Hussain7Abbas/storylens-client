@@ -4,9 +4,10 @@ import { z } from "zod";
 import type { Settings } from "../config";
 import type { CapabilityStatus, ModelOption, ProviderName } from "../types";
 import { ClientError } from "../types";
-import { cliEnvironment, executablePath, stopProcess } from "./process";
+import { geminiEnvironment } from "./gemini";
+import { cliEnvironment, executablePath, stopProcess, withWorkDir } from "./process";
 
-type RpcMessage = { id?: number; method?: string; result?: unknown; error?: unknown; type?: string; request_id?: string; response?: unknown };
+type RpcMessage = { jsonrpc?: string; params?: unknown; id?: number; method?: string; result?: unknown; error?: unknown; type?: string; request_id?: string; response?: unknown };
 const codexModel = z.object({
   id: z.string(), model: z.string(), displayName: z.string().optional(), hidden: z.boolean().optional(),
   inputModalities: z.array(z.string()).optional(), defaultReasoningEffort: z.string().optional(),
@@ -28,10 +29,11 @@ function modelAliases(provider: ProviderName, model: string): string[] {
 async function queryModels(
   executable: string, args: string[], initial: RpcMessage[], request: (id: number, cursor?: string) => RpcMessage,
   response: (msg: RpcMessage) => { models: unknown[]; cursor?: string } | null,
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<unknown[]> {
   const path = await executablePath(executable);
   return new Promise((resolve, reject) => {
-    const child = spawn(path, args, { stdio: "pipe", windowsHide: true, detached: process.platform !== "win32", shell: process.platform === "win32" && path.toLowerCase().endsWith(".cmd"), env: cliEnvironment(path) });
+    const child = spawn(path, args, { stdio: "pipe", windowsHide: true, detached: process.platform !== "win32", shell: process.platform === "win32" && path.toLowerCase().endsWith(".cmd"), cwd: options.cwd, env: { ...cliEnvironment(path), ...options.env } });
     const models: unknown[] = [];
     let buffer = "", done = false, currentId = 2;
     const initialize = initial.find(message => message.method === "initialize");
@@ -125,12 +127,35 @@ async function discoverClaude(path: string): Promise<ModelOption[]> {
   return [...unique.values()];
 }
 
+const geminiModel = z.object({ modelId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_.:/-]+$/), name: z.string().optional() });
+async function discoverGemini(path: string): Promise<ModelOption[]> {
+  return withWorkDir(async cwd => {
+    const env = await geminiEnvironment(cwd);
+    const entries = await queryModels(path, ["--acp", "--extensions", "none"], [
+      { jsonrpc: "2.0", method: "initialize", id: 1, params: {
+        protocolVersion: 1, clientInfo: { name: "storylens-client", version: "1" },
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      } },
+    ], id => ({ jsonrpc: "2.0", method: "session/new", id, params: { cwd, mcpServers: [] } }), msg => {
+      if (msg.id !== 2 || !msg.result) return null;
+      const result = z.object({ models: z.object({ availableModels: z.array(geminiModel) }) }).parse(msg.result);
+      return { models: result.models.availableModels };
+    }, { cwd, env });
+    return [...new Map(entries.map(entry => {
+      const model = geminiModel.parse(entry);
+      const option: ModelOption = { id: `gemini:${model.modelId}`, provider: "gemini", providerModel: model.modelId,
+        label: model.name ?? model.modelId, efforts: ["default"], defaultEffort: "default", aliases: [] };
+      return [option.id, option] as const;
+    })).values()];
+  });
+}
+
 export async function discoverCatalog(settings: Settings): Promise<{ models: ModelOption[]; providers: CapabilityStatus[] }> {
-  const results = await Promise.allSettled([discoverClaude(settings.claudePath), discoverCodex(settings.codexPath)]);
+  const results = await Promise.allSettled([discoverClaude(settings.claudePath), discoverCodex(settings.codexPath), discoverGemini(settings.geminiPath)]);
   const providers: CapabilityStatus[] = [];
   const models: ModelOption[] = [];
   for (const [index, result] of results.entries()) {
-    const provider: ProviderName = index === 0 ? "claude" : "codex";
+    const provider: ProviderName = (["claude", "codex", "gemini"] as const)[index];
     if (result.status === "fulfilled") { models.push(...result.value); providers.push({ provider, available: result.value.length > 0 }); }
     else providers.push({ provider, available: false, error: result.reason instanceof Error ? result.reason.message : "Model discovery failed." });
   }

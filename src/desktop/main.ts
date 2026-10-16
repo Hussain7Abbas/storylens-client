@@ -92,14 +92,14 @@ else {
       fromWindow(event);
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid settings.");
       const value = patch as Record<string, unknown>;
-      if (Object.keys(value).some(key => !["port", "claudePath", "codexPath", "keepInSystemTray"].includes(key))) throw new Error("Unsupported setting.");
+      if (Object.keys(value).some(key => !["port", "claudePath", "codexPath", "geminiPath", "keepInSystemTray"].includes(key))) throw new Error("Unsupported setting.");
       const previous = settings.get();
       await settings.update(value);
       const current = settings.get();
-      if (current.port !== previous.port || current.claudePath !== previous.claudePath || current.codexPath !== previous.codexPath) {
+      if (current.port !== previous.port || current.claudePath !== previous.claudePath || current.codexPath !== previous.codexPath || current.geminiPath !== previous.geminiPath) {
         await stopServer();
         await startServer();
-        if (!server) { await settings.update({ port: previous.port, claudePath: previous.claudePath, codexPath: previous.codexPath }); await startServer(); throw new Error("Could not apply connection settings. Previous settings restored."); }
+        if (!server) { await settings.update({ port: previous.port, claudePath: previous.claudePath, codexPath: previous.codexPath, geminiPath: previous.geminiPath }); await startServer(); throw new Error("Could not apply connection settings. Previous settings restored."); }
       }
       updateTray();
       return { status };
