@@ -1,4 +1,4 @@
-.PHONY: help install dev build typecheck test pack dist-mac dist-win smoke-browser
+.PHONY: help install dev build typecheck test pack dist-mac dist-win dist-linux smoke-browser
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -25,8 +25,9 @@ help:
 	@echo ""
 	@echo "$(BLUE)Packages$(RESET)"
 	@echo "  $(GREEN)pack$(RESET)            unpacked Electron app"
-	@echo "  $(GREEN)dist-mac$(RESET)        macOS DMG"
+	@echo "  $(GREEN)dist-mac$(RESET)        macOS DMGs (Intel + Apple Silicon)"
 	@echo "  $(GREEN)dist-win$(RESET)        Windows NSIS installer"
+	@echo "  $(GREEN)dist-linux$(RESET)      Linux AppImage + Debian package"
 	@echo ""
 
 install:
@@ -55,3 +56,6 @@ dist-mac:
 
 dist-win:
 	@cd "$(ROOT)" && bun run dist:win
+
+dist-linux:
+	@cd "$(ROOT)" && bun run dist:linux

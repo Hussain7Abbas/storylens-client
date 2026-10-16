@@ -2,22 +2,37 @@ name: Desktop client
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
   package:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: mac
           - os: windows-latest
             target: win
+          - os: ubuntu-latest
+            target: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - name: Verify release version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: bun -e 'const { version } = await Bun.file("package.json").json(); if (process.env.RELEASE_TAG !== `v${version}`) throw new Error("Release tag must match package.json version");'
       - name: Install
         run: bun install --frozen-lockfile
       - name: Typecheck and test
@@ -34,4 +49,30 @@ jobs:
           path: |
             release/*.dmg
             release/*.exe
+            release/*.AppImage
+            release/*.deb
           if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'release'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: desktop-release-${{ github.event.release.tag_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: storylens-client-*
+          merge-multiple: true
+          path: release
+      - name: Publish installers and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          (cd release && sha256sum -- * > ../SHA256SUMS)
+          gh release upload "$RELEASE_TAG" release/* SHA256SUMS --clobber
