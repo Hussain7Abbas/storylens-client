@@ -431,7 +431,7 @@ test("GenerateImage falls back to a Codex model and passes web search only when 
 		(
 			await server.inject({ method: "GET", url: "/capabilities", headers })
 		).json().features,
-	).toEqual({ webSearch: true, imageGeneration: true });
+	).toEqual({ webSearch: true, imageGeneration: true, imageReferences: true });
 	await server.inject({
 		method: "POST",
 		url: "/ExecutePrompt",

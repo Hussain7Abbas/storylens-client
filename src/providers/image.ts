@@ -1,6 +1,7 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, join, relative, resolve, isAbsolute } from "node:path";
+import { normalizeWikiUrl } from "../crawl/page";
 import type { Settings } from "../config";
 import type { GeneratedImage, ModelOption } from "../types";
 import { ClientError } from "../types";
@@ -100,18 +101,63 @@ Create an original illustration: do not copy official artwork, cover art, or the
 ${prompt}`;
 }
 
-export async function generateCodexImage(settings: Settings, model: ModelOption, effort: string, prompt: string, signal: AbortSignal): Promise<GeneratedImage> {
+export async function generateCodexImage(settings: Settings, model: ModelOption, effort: string, prompt: string, signal: AbortSignal, referenceImageUrls: string[] = []): Promise<GeneratedImage> {
   if (model.provider !== "codex") throw new ClientError("UNSUPPORTED_PROVIDER", "Image generation requires a Codex model.", 422);
-  return withWorkDir(async cwd => {
+  return withWorkDir(async workDir => {
+    const cwd = join(workDir, "output");
+    await mkdir(cwd);
+    const references = await prepareImageReferences(referenceImageUrls, join(workDir, "references"), AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
     const since = Date.now() - 1_000;
     const args = ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "-c", "mcp_servers={}", "-c", "project_doc_max_bytes=0", "--disable", "browser_use", "--disable", "computer_use", "--disable", "apps", "--disable", "plugins", "--disable", "hooks", "--disable", "shell_tool", "--enable", "image_generation", "-m", model.providerModel];
     if (effort !== "default") args.push("-c", `model_reasoning_effort="${effort}"`);
-    args.push("-");
-    const { stdout } = await runCli(settings.codexPath, args, imagePrompt(prompt), { cwd, signal, timeoutMs: 300_000, maxBytes: 30_000_000 });
+    for (const reference of references) args.push("--image", reference.path);
+    args.push("--", "-");
+    const mapping = references.map((reference, index) => `Attached reference ${index + 1}: ${reference.url}`).join("\n");
+    const { stdout } = await runCli(settings.codexPath, args, imagePrompt(`${mapping}\n\n${prompt}`), { cwd, signal, timeoutMs: 300_000, maxBytes: 30_000_000 });
     const evidence = parseCodexImageEvents(stdout);
     const bytes = await resolveGeneratedImage(evidence, [codexImageFolder(), cwd], since);
     const mimeType = imageMimeType(bytes);
     if (!mimeType) throw new ClientError("PROVIDER_RESULT", "Codex returned an unsupported image format.");
     return { mimeType, data: bytes.toString("base64"), revisedPrompt: evidence.revisedPrompt };
   });
+}
+
+/** Downloads bounded public image references; inputs live outside the generated-output folder. */
+export async function prepareImageReferences(urls: string[], folder: string, signal: AbortSignal, request: typeof fetch = fetch) {
+  if (!urls.length) return [];
+  await mkdir(folder, { recursive: true });
+  const references: { url: string; path: string }[] = [];
+  let total = 0;
+  for (const original of [...new Set(urls)].slice(0, 8)) {
+    let url = normalizeWikiUrl(original);
+    if (!url) throw new ClientError("INVALID_REQUEST", "Reference images must use public HTTP(S) URLs.", 400);
+    let response: Response | undefined;
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      response = await request(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), redirect: "manual", credentials: "omit" });
+      if (response.status < 300 || response.status >= 400) break;
+      const next = normalizeWikiUrl(response.headers.get("location") ?? "", url);
+      await response.body?.cancel();
+      if (!next) throw new ClientError("INVALID_REQUEST", "Reference image redirects must stay on public HTTP(S) URLs.", 400);
+      url = next;
+    }
+    if (!response?.ok || !response.body) throw new ClientError("PROVIDER_RESULT", "A reference image could not be loaded.");
+    const chunks: Buffer[] = [];
+    let length = 0;
+    const reader = response.body.getReader();
+    try { while (true) {
+      const { value: chunk, done } = await reader.read();
+      if (done) break;
+      length += chunk.byteLength;
+      total += chunk.byteLength;
+      if (length > IMAGE_BYTES_LIMIT || total > 24_000_000) { await reader.cancel().catch(() => {}); throw new ClientError("OUTPUT_TOO_LARGE", "Reference images exceeded the size limit."); }
+      chunks.push(Buffer.from(chunk));
+    } } finally { reader.releaseLock(); }
+    const bytes = Buffer.concat(chunks);
+    const mime = imageMimeType(bytes);
+    if (!mime) throw new ClientError("INVALID_REQUEST", "Reference images must be PNG, JPEG or WebP.", 400);
+    const path = join(folder, `${references.length}.${mime.split("/")[1]}`);
+    await writeFile(path, bytes);
+    references.push({ url: original, path });
+  }
+  return references;
 }

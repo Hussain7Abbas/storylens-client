@@ -20,3 +20,5 @@ See the umbrella project's [setup, protocol, privacy, and limits](https://github
 [Website](https://storylens.iscoded.com) · [Privacy Policy](https://storylens.iscoded.com/en/privacy/) · [Terms](https://storylens.iscoded.com/en/terms/). The settings window opens these links in the system browser; all other external windows remain denied.
 
 The settings UI supports System/Light/Dark appearance. **Keep in system tray** defaults to true: closing hides the window and keeps the service available; use the tray menu to reopen or quit. Disable and save to quit on window close. Tray-only changes do not restart local AI.
+
+Chapter cover generation remains Codex-only, independently of the text provider. Current clients advertise reference-image support and attach up to eight keyword images to the image request. References are temporarily downloaded with size limits and removed with the job directory; they are kept outside generated-image output discovery.
