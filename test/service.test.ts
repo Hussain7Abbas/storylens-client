@@ -431,7 +431,7 @@ test("GenerateImage falls back to a Codex model and passes web search only when 
 		(
 			await server.inject({ method: "GET", url: "/capabilities", headers })
 		).json().features,
-	).toEqual({ webSearch: true, imageGeneration: true, imageReferences: true });
+	).toEqual({ webSearch: true, imageGeneration: true, imageReferences: true, imagePromptInput: true });
 	await server.inject({
 		method: "POST",
 		url: "/ExecutePrompt",
@@ -470,4 +470,71 @@ test("GenerateImage falls back to a Codex model and passes web search only when 
 		).statusCode,
 	).toBe(400);
 	await server.close();
+});
+
+test("image generation draws the AI description and returns it instead of the source brief", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "storylens-description-test-"));
+	dirs.push(dir);
+	const settings = new SettingsStore(join(dir, "settings.json"));
+	await settings.load();
+	const description = "A silver-cloaked scout raises a sword on a moonlit bridge, ink wash.";
+	const source = "Art instructions: ink wash. <CHAPTER>Mira raises her sword.</CHAPTER>";
+	let receivedSignal: AbortSignal | undefined;
+	let drawn = "";
+	const service = new PromptService(settings,
+		async (_settings, selected, _effort, prompt, language, signal) => {
+			expect(selected.id).toBe(model.id);
+			expect(prompt).toContain(source);
+			expect(language).toBe("en");
+			expect(service.activeCount()).toBe(1);
+			receivedSignal = signal;
+			return description;
+		},
+		async () => ({ models: [model], providers: [] }),
+		async (_settings, _model, _effort, prompt, signal, references) => {
+			drawn = prompt;
+			expect(signal).toBe(receivedSignal);
+			expect(references).toEqual(["https://images.example.invalid/scout.png"]);
+			return { mimeType: "image/png", data: png.toString("base64") };
+		});
+	const result = await service.generateImage({ prompt: source, model: model.id, effort: "low", referenceImageUrls: ["https://images.example.invalid/scout.png"] });
+	expect(drawn).toBe(description);
+	expect(result.revisedPrompt).toBe(description);
+	expect(result.revisedPrompt).not.toContain("<CHAPTER>");
+});
+
+for (const outcome of ["failure", "empty", "oversized", "stopped"] as const)
+	test(`image description ${outcome} cannot start the image model`, async () => {
+		const dir = await mkdtemp(join(tmpdir(), "storylens-description-failure-"));
+		dirs.push(dir);
+		const settings = new SettingsStore(join(dir, "settings.json"));
+		await settings.load();
+		let draws = 0;
+		const service = new PromptService(settings,
+			async () => {
+				if (outcome === "failure") throw new Error("Text provider failed");
+				if (outcome === "stopped") service.cancelAll();
+				return outcome === "empty" ? " " : outcome === "oversized" ? "x".repeat(4001) : "A scout";
+			},
+			async () => ({ models: [model], providers: [] }),
+			async () => { draws++; return { mimeType: "image/png", data: "AA==" }; });
+		await expect(service.generateImage({ prompt: "Chapter source", model: model.id, effort: "low" })).rejects.toThrow();
+		expect(draws).toBe(0);
+		expect(service.activeCount()).toBe(0);
+	});
+
+
+test("saved descriptions bypass text synthesis and reach the image model unchanged", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "storylens-saved-description-"));
+  dirs.push(dir);
+  const settings = new SettingsStore(join(dir, "settings.json"));
+  await settings.load();
+  const prompt = "A scout with a green cloak beneath two red moons.";
+  let drawn = "";
+  const service = new PromptService(settings, async () => { throw new Error("Must not rewrite the edited description"); },
+    async () => ({ models: [model], providers: [] }),
+    async (_settings, _model, _effort, description) => { drawn = description; return { mimeType: "image/png", data: "AA==" }; });
+  const result = await service.generateImage({ prompt, model: model.id, effort: "low", promptIsDescription: true });
+  expect(drawn).toBe(prompt);
+  expect(result.revisedPrompt).toBe(prompt);
 });

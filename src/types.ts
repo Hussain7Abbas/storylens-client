@@ -16,7 +16,7 @@ export type Capabilities = {
   providers: CapabilityStatus[];
   limits: { promptBytes: number; outputBytes: number; timeoutMs: number; concurrent: number };
   /** Optional features; older clients omit this object. */
-  features: { webSearch: boolean; imageGeneration: boolean; imageReferences?: boolean };
+  features: { webSearch: boolean; imageGeneration: boolean; imagePromptInput?: boolean; imageReferences?: boolean };
 };
 export type ExecuteInput = { prompt: string; model: string; effort: string; responseLanguage: ResponseLanguage; webSearch?: boolean };
 export type ExecuteOptions = { webSearch?: boolean };
