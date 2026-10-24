@@ -95,7 +95,7 @@ export async function resolveGeneratedImage(evidence: ImageEvidence, folders: st
 }
 
 export function imagePrompt(prompt: string): string {
-  return `Use your image generation tool exactly once to create one image from the brief below, then reply with one short sentence describing the image. Do not ask questions.
+  return `Use your image generation tool exactly once to create one image from the visual description below, then reply with one short sentence describing the image. Pass the visual description to the image tool without rewriting it or adding source context. Use only the attached reference images. Do not ask questions.
 Create an original illustration: do not copy official artwork, cover art, or the designs of existing adaptations or well-known characters, and do not add text, captions, watermarks or signatures.
 
 ${prompt}`;

@@ -413,7 +413,7 @@ test("GenerateImage falls back to a Codex model and passes web search only when 
 		settings,
 		async (_s, _m, _e, _p, _l, _signal, options) => {
 			webSearch = options?.webSearch;
-			return "ok";
+			return _p.includes("availableReferenceImageUrls") ? JSON.stringify({ imageDescription: "A knight in armor.", referenceImageUrls: [] }) : "ok";
 		},
 		async () => ({ models: [claude, model], providers: [] }),
 		async (_s, chosen, effort) => {
@@ -431,7 +431,7 @@ test("GenerateImage falls back to a Codex model and passes web search only when 
 		(
 			await server.inject({ method: "GET", url: "/capabilities", headers })
 		).json().features,
-	).toEqual({ webSearch: true, imageGeneration: true, imageReferences: true, imagePromptInput: true });
+	).toEqual({ webSearch: true, imageGeneration: true, imageReferences: true, imagePromptInput: true, structuredImageDescriptions: true });
 	await server.inject({
 		method: "POST",
 		url: "/ExecutePrompt",
@@ -484,11 +484,13 @@ test("image generation draws the AI description and returns it instead of the so
 	const service = new PromptService(settings,
 		async (_settings, selected, _effort, prompt, language, signal) => {
 			expect(selected.id).toBe(model.id);
-			expect(prompt).toContain(source);
+			expect(prompt).toContain(JSON.stringify(source));
+			expect(prompt).toContain("latest applicable earlier observation");
+			expect(prompt).toContain("Reference images and old descriptions preserve identity, not old loadouts");
 			expect(language).toBe("en");
 			expect(service.activeCount()).toBe(1);
 			receivedSignal = signal;
-			return description;
+			return JSON.stringify({ imageDescription: description, referenceImageUrls: ["https://images.example.invalid/scout.png"] });
 		},
 		async () => ({ models: [model], providers: [] }),
 		async (_settings, _model, _effort, prompt, signal, references) => {
@@ -514,7 +516,7 @@ for (const outcome of ["failure", "empty", "oversized", "stopped"] as const)
 			async () => {
 				if (outcome === "failure") throw new Error("Text provider failed");
 				if (outcome === "stopped") service.cancelAll();
-				return outcome === "empty" ? " " : outcome === "oversized" ? "x".repeat(4001) : "A scout";
+				return JSON.stringify({ imageDescription: outcome === "empty" ? " " : outcome === "oversized" ? "x".repeat(4001) : "A scout", referenceImageUrls: [] });
 			},
 			async () => ({ models: [model], providers: [] }),
 			async () => { draws++; return { mimeType: "image/png", data: "AA==" }; });
@@ -524,17 +526,21 @@ for (const outcome of ["failure", "empty", "oversized", "stopped"] as const)
 	});
 
 
-test("saved descriptions bypass text synthesis and reach the image model unchanged", async () => {
+test("saved descriptions still pass through text AI before image generation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "storylens-saved-description-"));
   dirs.push(dir);
   const settings = new SettingsStore(join(dir, "settings.json"));
   await settings.load();
   const prompt = "A scout with a green cloak beneath two red moons.";
   let drawn = "";
-  const service = new PromptService(settings, async () => { throw new Error("Must not rewrite the edited description"); },
+  let textCalls = 0;
+  const resolved = "A green-cloaked scout beneath two red moons, watercolor.";
+  const service = new PromptService(settings, async (_settings, _model, _effort, source) => { textCalls++; expect(source).toContain(prompt); return JSON.stringify({ imageDescription: resolved, referenceImageUrls: [] }); },
     async () => ({ models: [model], providers: [] }),
     async (_settings, _model, _effort, description) => { drawn = description; return { mimeType: "image/png", data: "AA==" }; });
   const result = await service.generateImage({ prompt, model: model.id, effort: "low", promptIsDescription: true });
-  expect(drawn).toBe(prompt);
-  expect(result.revisedPrompt).toBe(prompt);
+  expect(textCalls).toBe(1);
+  expect(drawn).toBe(resolved);
+  expect(result.imageDescription).toBe(resolved);
+  expect(result.revisedPrompt).toBe(resolved);
 });
