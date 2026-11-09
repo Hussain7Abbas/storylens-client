@@ -10,7 +10,8 @@ import { ClientError } from "./types";
 
 export const LIMITS = { promptBytes: 500_000, outputBytes: 1_000_000, timeoutMs: 240_000, concurrent: 2 } as const;
 const requestSchema = z.object({ prompt: z.string().min(1), model: z.string().min(1).max(200), effort: z.string().min(1).max(20), responseLanguage: z.enum(["en", "ar"]), webSearch: z.boolean().optional() }).strict();
-const imageSchema = z.object({ prompt: z.string().min(1), model: z.string().min(1).max(200), effort: z.string().min(1).max(20), promptIsDescription: z.boolean().optional(), referenceImageUrls: z.array(z.string().url().max(2048)).max(8).optional() }).strict();
+const chapterImageKey = z.object({ novelId: z.string().uuid(), chapterNumber: z.number().int().min(0).max(2147483647) }).strict();
+const imageSchema = z.object({ prompt: z.string().min(1), model: z.string().min(1).max(200), effort: z.string().min(1).max(20), promptIsDescription: z.boolean().optional(), referenceImageUrls: z.array(z.string().url().max(2048)).max(8).optional(), chapter: chapterImageKey.optional() }).strict();
 
 export class PromptService {
   private capabilities?: Capabilities;
@@ -19,7 +20,7 @@ export class PromptService {
   async refresh(): Promise<Capabilities> {
     const catalog = await this.discover(this.settings.get());
     const imageGeneration = catalog.models.some(model => model.provider === "codex");
-    this.capabilities = { protocolVersion: 2, models: catalog.models, providers: catalog.providers, limits: LIMITS, features: { webSearch: true, imageGeneration, imageReferences: true, imagePromptInput: true, structuredImageDescriptions: true } };
+    this.capabilities = { protocolVersion: 2, models: catalog.models, providers: catalog.providers, limits: LIMITS, features: { webSearch: true, imageGeneration, imageReferences: true, imagePromptInput: true, structuredImageDescriptions: true, chapterImageIdentity: true } };
     return this.capabilities;
   }
   async catalog(): Promise<Capabilities> { return this.capabilities ?? this.refresh(); }
@@ -45,7 +46,7 @@ export class PromptService {
   async generateImage(input: unknown, signal?: AbortSignal): Promise<GenerateImageOutput> {
     const parsed = imageSchema.safeParse(input);
     if (!parsed.success) throw new ClientError("INVALID_REQUEST", "Expected nonempty prompt, model, and effort.", 400);
-    const { prompt, model: requestedModel } = parsed.data;
+    const { prompt, model: requestedModel, chapter } = parsed.data;
     if (Buffer.byteLength(prompt, "utf8") > LIMITS.promptBytes) throw new ClientError("PROMPT_TOO_LARGE", "Prompt exceeds the 500 KB limit.", 413);
     const models = (await this.catalog()).models.filter(item => item.provider === "codex");
     const requested = models.find(item => item.id === requestedModel || item.aliases.includes(requestedModel));
@@ -66,7 +67,7 @@ export class PromptService {
       try { description = parseImageDescription(output, availableReferences); }
       catch { throw new ClientError("PROVIDER_RESULT", "Text AI returned an invalid image description or reference selection."); }
       const image = await this.image(this.settings.get(), model, effort, description.imageDescription, imageSignal, description.referenceImageUrls);
-      return { requestId: randomUUID(), ...image, imageDescription: description.imageDescription, revisedPrompt: description.imageDescription, model: model.id, effort, durationMs: Date.now() - started };
+      return { requestId: randomUUID(), ...image, imageDescription: description.imageDescription, revisedPrompt: description.imageDescription, model: model.id, effort, durationMs: Date.now() - started, ...(chapter ? { chapter } : {}) };
     });
   }
   private async admit<T>(signal: AbortSignal | undefined, run: (controller: AbortController) => Promise<T>): Promise<T> {

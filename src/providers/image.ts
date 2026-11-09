@@ -27,7 +27,7 @@ function inside(folder: string, path: string): boolean {
   return !!rel && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-type ImageEvidence = { base64?: string; paths: string[]; revisedPrompt?: string; failure?: string };
+type ImageEvidence = { threadId?: string; base64?: string; paths: string[]; revisedPrompt?: string; failure?: string };
 
 /** Collects base64 results and saved paths from Codex image generation events, ignoring every other item. */
 export function parseCodexImageEvents(stdout: string): ImageEvidence {
@@ -49,7 +49,13 @@ export function parseCodexImageEvents(stdout: string): ImageEvidence {
   };
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
-    try { visit(JSON.parse(line), false); } catch { /* Ignore log lines */ }
+    try {
+      const event = JSON.parse(line);
+      if (event?.type === "thread.started" && typeof event.thread_id === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(event.thread_id)) {
+        evidence.threadId ??= event.thread_id;
+      }
+      visit(event, false);
+    } catch { /* Ignore log lines */ }
   }
   return evidence;
 }
@@ -78,16 +84,21 @@ async function readImage(path: string): Promise<Buffer> {
   return readFile(path);
 }
 
-/** Picks the generated image: inline base64 first, then a reported path, then the newest file Codex wrote during this run. */
-export async function resolveGeneratedImage(evidence: ImageEvidence, folders: string[], since: number): Promise<Buffer> {
+/** A job may use its own event, thread folder or workspace. Never scan the shared Codex image root. */
+export async function resolveGeneratedImage(evidence: ImageEvidence, workFolder: string, since: number, generatedRoot = codexImageFolder()): Promise<Buffer> {
   if (evidence.base64) {
     const bytes = Buffer.from(evidence.base64.replace(/^data:image\/[a-z]+;base64,/, ""), "base64");
-    if (imageMimeType(bytes)) return bytes;
+    if (imageMimeType(bytes)) {
+      if (bytes.length > IMAGE_BYTES_LIMIT) throw new ClientError("OUTPUT_TOO_LARGE", "Generated image exceeded the size limit.");
+      return bytes;
+    }
   }
+  const threadFolder = evidence.threadId ? join(generatedRoot, evidence.threadId) : undefined;
+  const reportedFolders = [workFolder, threadFolder ?? generatedRoot];
   for (const path of evidence.paths)
-    if (imageExtensions.has(extname(path).toLowerCase()) && folders.some(folder => inside(folder, path)))
+    if (imageExtensions.has(extname(path).toLowerCase()) && reportedFolders.some(folder => inside(folder, path)))
       return readImage(path);
-  for (const folder of folders) {
+  for (const folder of threadFolder ? [threadFolder, workFolder] : [workFolder]) {
     const path = await newestImage(folder, since);
     if (path) return readImage(path);
   }
@@ -115,7 +126,7 @@ export async function generateCodexImage(settings: Settings, model: ModelOption,
     const mapping = references.map((reference, index) => `Attached reference ${index + 1}: ${reference.url}`).join("\n");
     const { stdout } = await runCli(settings.codexPath, args, imagePrompt(`${mapping}\n\n${prompt}`), { cwd, signal, timeoutMs: 300_000, maxBytes: 30_000_000 });
     const evidence = parseCodexImageEvents(stdout);
-    const bytes = await resolveGeneratedImage(evidence, [codexImageFolder(), cwd], since);
+    const bytes = await resolveGeneratedImage(evidence, cwd, since);
     const mimeType = imageMimeType(bytes);
     if (!mimeType) throw new ClientError("PROVIDER_RESULT", "Codex returned an unsupported image format.");
     return { mimeType, data: bytes.toString("base64"), revisedPrompt: evidence.revisedPrompt };

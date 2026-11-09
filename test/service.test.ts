@@ -367,7 +367,7 @@ test("image events yield inline results or saved paths, never other items", asyn
 	);
 	expect(inline.revisedPrompt).toBe("A portrait");
 	expect(
-		imageMimeType(await resolveGeneratedImage(inline, [], Date.now())),
+		imageMimeType(await resolveGeneratedImage(inline, tmpdir(), Date.now())),
 	).toBe("image/png");
 
 	const dir = await mkdtemp(join(tmpdir(), "storylens-image-test-"));
@@ -379,7 +379,7 @@ test("image events yield inline results or saved paths, never other items", asyn
 		`{"type":"item.completed","item":{"type":"imageGeneration","savedPath":${JSON.stringify(saved)}}}\n`,
 	);
 	expect(
-		(await resolveGeneratedImage(byPath, [dir], Date.now() + 60_000)).equals(
+		(await resolveGeneratedImage(byPath, dir, Date.now() + 60_000)).equals(
 			png,
 		),
 	).toBe(true);
@@ -387,11 +387,32 @@ test("image events yield inline results or saved paths, never other items", asyn
 		`{"type":"item.completed","item":{"type":"image_generation","saved_path":"/etc/passwd.png"}}\n`,
 	);
 	await expect(
-		resolveGeneratedImage(outside, [join(dir, "missing")], Date.now()),
+		resolveGeneratedImage(outside, join(dir, "missing"), Date.now(), dir),
 	).rejects.toMatchObject({ code: "PROVIDER_RESULT" });
 	expect(
-		(await resolveGeneratedImage({ paths: [] }, [dir], 0)).equals(png),
+		(await resolveGeneratedImage({ paths: [] }, dir, 0)).equals(png),
 	).toBe(true);
+});
+
+test("overlapping image jobs resolve only their own Codex thread's output", async () => {
+	const generatedRoot = await mkdtemp(join(tmpdir(), "storylens-concurrent-image-"));
+	dirs.push(generatedRoot);
+	const first = crypto.randomUUID();
+	const second = crypto.randomUUID();
+	const empty = crypto.randomUUID();
+	const work = join(generatedRoot, "empty-workspace");
+	const nextImage = Buffer.concat([png, Buffer.from("chapter two")]);
+	for (const thread of [first, second, empty, "empty-workspace"])
+		await mkdir(join(generatedRoot, thread));
+	await writeFile(join(generatedRoot, first, "image.png"), png);
+	const secondPath = join(generatedRoot, second, "image.png");
+	await writeFile(secondPath, nextImage);
+	const evidence = (thread_id: string) => parseCodexImageEvents(JSON.stringify({ type: "thread.started", thread_id }));
+	const [firstResult, secondResult] = await Promise.all([first, second].map((id) => resolveGeneratedImage(evidence(id), work, 0, generatedRoot)));
+	expect(firstResult).toEqual(png);
+	expect(secondResult).toEqual(nextImage);
+	await expect(resolveGeneratedImage({ ...evidence(empty), paths: [secondPath] }, work, 0, generatedRoot)).rejects.toMatchObject({ code: "PROVIDER_RESULT" });
+	await expect(resolveGeneratedImage({ paths: [] }, work, 0, generatedRoot)).rejects.toMatchObject({ code: "PROVIDER_RESULT" });
 });
 
 test("GenerateImage falls back to a Codex model and passes web search only when asked", async () => {
@@ -431,7 +452,7 @@ test("GenerateImage falls back to a Codex model and passes web search only when 
 		(
 			await server.inject({ method: "GET", url: "/capabilities", headers })
 		).json().features,
-	).toEqual({ webSearch: true, imageGeneration: true, imageReferences: true, imagePromptInput: true, structuredImageDescriptions: true });
+	).toEqual({ webSearch: true, imageGeneration: true, imageReferences: true, imagePromptInput: true, structuredImageDescriptions: true, chapterImageIdentity: true });
 	await server.inject({
 		method: "POST",
 		url: "/ExecutePrompt",
@@ -470,6 +491,42 @@ test("GenerateImage falls back to a Codex model and passes web search only when 
 		).statusCode,
 	).toBe(400);
 	await server.close();
+});
+
+test("overlapping desktop image requests return their own chapter and image", async () => {
+	const { settings, server: unused, headers } = await fixture();
+	await unused.close();
+	const entered = Promise.withResolvers<void>();
+	const finish = Promise.withResolvers<void>();
+	const service = new PromptService(settings,
+		async (_settings, _model, _effort, prompt) => JSON.stringify({ imageDescription: prompt.includes("Lantern") ? "Lantern at sea" : "Bridge in the rain", referenceImageUrls: [] }),
+		async () => ({ models: [model], providers: [] }),
+		async (_settings, _model, _effort, prompt) => {
+			if (prompt === "Lantern at sea") {
+				entered.resolve();
+				await finish.promise;
+			}
+			return { mimeType: "image/png", data: Buffer.from(prompt).toString("base64") };
+		});
+	const server = createServer(settings, service);
+	const novelId = crypto.randomUUID();
+	const post = (chapterNumber: number, prompt: string) => server.inject({
+		method: "POST", url: "/GenerateImage", headers: { ...headers, accept: "application/x-ndjson" },
+		payload: { model: model.id, effort: "low", chapter: { novelId, chapterNumber }, prompt },
+	});
+	const first = post(7, "Lantern");
+	try {
+		await Promise.race([entered.promise, first.then((response) => { throw new Error(`First generation ended early: ${response.body}`); })]);
+		const second = await post(8, "Bridge");
+		const result = (body: string) => JSON.parse(body.trim().split("\n").at(-1) ?? "null");
+		expect(result(second.body)).toMatchObject({ type: "result", chapter: { novelId, chapterNumber: 8 }, data: Buffer.from("Bridge in the rain").toString("base64") });
+		finish.resolve();
+		expect(result((await first).body)).toMatchObject({ type: "result", chapter: { novelId, chapterNumber: 7 }, data: Buffer.from("Lantern at sea").toString("base64") });
+	} finally {
+		finish.resolve();
+		await first;
+		await server.close();
+	}
 });
 
 test("image generation draws the AI description and returns it instead of the source brief", async () => {
